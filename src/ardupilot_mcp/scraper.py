@@ -91,6 +91,7 @@ def _parse_parameter(
         section=_find_section_name(section),
         source_url=source_url,
         advanced=_has_advanced_flag(section),
+        reboot_required=_has_reboot_required_flag(section),
         description=_extract_description(section),
     )
 
@@ -114,6 +115,15 @@ def _has_advanced_flag(section: Tag) -> bool:
     """Detect the 'Note: This parameter is for advanced users' line-block."""
     for div in section.find_all("div", class_="line-block", recursive=False):
         em = div.find("em", string=re.compile("advanced users", re.I))
+        if em is not None:
+            return True
+    return False
+
+
+def _has_reboot_required_flag(section: Tag) -> bool:
+    """Detect the 'Note: Reboot required after change' line-block."""
+    for div in section.find_all("div", class_="line-block", recursive=False):
+        em = div.find("em", string=re.compile("reboot required", re.I))
         if em is not None:
             return True
     return False
