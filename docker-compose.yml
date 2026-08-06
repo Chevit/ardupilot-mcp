@@ -1,0 +1,29 @@
+services:
+  mcp-stdio:
+    build: .
+    volumes:
+      - ./data:/app/data
+    stdin_open: true
+    tty: false
+    # Not meant to be left `up` — a Claude Desktop/Code stdio client spawns
+    # it per-connection via: docker compose run --rm mcp-stdio
+    # The same image/service also runs the ingest CLI, e.g.:
+    #   docker compose run --rm mcp-stdio ardupilot-refresh --html "..." \
+    #       --vehicle plane --firmware-version 4.8.0 \
+    #       --source-url https://ardupilot.org/plane/docs/parameters.html \
+    #       --build-vectors
+
+  mcp-http:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HTTP_PORT: "8000"
+    ports:
+      - "${PORT:-8000}:8000"
+    restart: unless-stopped
+    # Long-running: docker compose up -d mcp-http
+    # Remote clients connect to http://<this-host>:8000/mcp
+    # No app-level auth — expose only on a trusted network/VPN, or put a
+    # reverse proxy with auth in front.
