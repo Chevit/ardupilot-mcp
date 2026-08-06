@@ -705,14 +705,14 @@ git commit -m "feat: add URL-based ingest path with vehicle/version auto-detecti
 
 ---
 
-### Task 6: `ingest.py` CLI — `--url` flag, optional `--vehicle`/`--firmware-version`
+### Task 6: `ingest.py` CLI — `--url` flag, optional `--vehicle`/`--firmware-version`, clean error output
 
 **Files:**
 
 - Modify: `src/ardupilot_mcp/ingest.py` (`main()`, now around line 168 after Task 5's insertions — search for `def main(`)
 - Modify: `tests/test_ingest.py`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 Append to `tests/test_ingest.py`:
 
@@ -733,14 +733,28 @@ def test_main_rejects_neither_html_nor_url_flag(capsys):
     with pytest.raises(SystemExit):
         main([])
     assert "one of the arguments --html --url is required" in capsys.readouterr().err
+
+
+def test_main_prints_clean_error_instead_of_traceback(tmp_path, capsys):
+    # A missing --html path makes ingest() raise FileNotFoundError. main()
+    # must catch it, print a one-line message, and return 1 — not let the
+    # exception propagate as a raw traceback (this tool's audience per
+    # README is explicitly non-technical Docker users).
+    missing = tmp_path / "does-not-exist.html"
+    exit_code = main([
+        "--html", str(missing), "--vehicle", "plane", "--firmware-version", "1.0",
+    ])
+    assert exit_code == 1
+    assert capsys.readouterr().err.startswith("error:")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_ingest.py -v -k "main_rejects"`
-Expected: FAIL — current `main()` has `--html` as a plain `required=True`
-argument, not part of a mutually exclusive group, so `--url` isn't even a
-recognized flag yet (`error: unrecognized arguments: --url ...`).
+Run: `uv run pytest tests/test_ingest.py -v -k "main_rejects or main_prints_clean_error"`
+Expected: FAIL — `main()` has `--html` as a plain `required=True` argument
+(not part of a mutually exclusive group, so `--url` isn't even a recognized
+flag yet), and has no try/except around the `ingest()` call, so the missing-
+file case raises `FileNotFoundError` straight through instead of returning 1.
 
 - [ ] **Step 3: Update `main()`**
 
@@ -776,17 +790,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args(argv)
 
-    result = ingest(
-        html_path=args.html,
-        url=args.url,
-        vehicle=args.vehicle,
-        firmware_version=args.firmware_version,
-        source_url=args.source_url,
-        db_path=args.db,
-        build_vectors=args.build_vectors,
-        vectors_path=args.vectors_path,
-        verbose=not args.quiet,
-    )
+    try:
+        result = ingest(
+            html_path=args.html,
+            url=args.url,
+            vehicle=args.vehicle,
+            firmware_version=args.firmware_version,
+            source_url=args.source_url,
+            db_path=args.db,
+            build_vectors=args.build_vectors,
+            vectors_path=args.vectors_path,
+            verbose=not args.quiet,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+        # Non-technical Docker users are the primary audience (per README) —
+        # a bare traceback is the wrong default here. ingest()'s own
+        # ValueError/RuntimeError messages are already written to be
+        # actionable on their own (see Task 5's _fetch_and_archive).
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     print(f"ingested {result.count} parameters "
           f"({result.vehicle} {result.firmware_version}) -> {args.db}")
     return 0
@@ -799,7 +822,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_ingest.py -v`
-Expected: PASS (7 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 5: Run the full test suite**
 
@@ -818,13 +841,15 @@ git commit -m "feat: add --url flag to ingest CLI, make --vehicle/--firmware-ver
 
 ---
 
-### Task 7: Update README via `/documentation:update-readme`
+### Task 7: Update README and CLAUDE.md
 
 **Files:**
 
 - Modify: `README.md` (via skill, not hand-edited)
+- Modify: `CLAUDE.md:10-28` (Commands section)
+- Modify: `CLAUDE.md:30-77` (Docker section)
 
-- [ ] **Step 1: Run the skill**
+- [ ] **Step 1: Run `/documentation:update-readme`**
 
 Invoke `/documentation:update-readme`. Point it at what changed: `ingest.py`
 now accepts `--url` as an alternative to `--html`/`--vehicle`/`--firmware-version`
@@ -835,7 +860,7 @@ step 5) and the "Advanced: running without Docker" section's example command
 to show the `--url` form as the primary path, keeping the `--html` form
 documented as the fallback for offline/manual use.
 
-- [ ] **Step 2: Review the diff**
+- [ ] **Step 2: Review the README diff**
 
 Run: `git diff README.md`
 Confirm: the `--url` flow reads as the recommended default (no more manual
@@ -843,11 +868,47 @@ Confirm: the `--url` flow reads as the recommended default (no more manual
 still documented as an alternative, and no other README sections
 (Features, MCP tools, Project structure) were touched.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Update CLAUDE.md's Commands section**
+
+In `CLAUDE.md`, find the fenced `bash` block under `## Commands` that ends
+with `--build-vectors   # optional: also rebuild the semantic index for this
+version`. Add a second ingest example directly below the existing one,
+inside the same fenced block:
 
 ```bash
-git add README.md
-git commit -m "docs: document --url ingest flow in README"
+# Or fetch directly from ardupilot.org instead of a local file — vehicle
+# and firmware version are auto-detected from the URL/page
+uv run python -m ardupilot_mcp.ingest \
+    --url https://ardupilot.org/copter/docs/parameters.html \
+    --build-vectors
+```
+
+- [ ] **Step 4: Update CLAUDE.md's Docker section**
+
+In `CLAUDE.md`, find the fenced `bash` block under `## Docker` containing
+the `docker compose run --rm mcp-stdio ardupilot-refresh --html ...`
+example. Add directly below it, inside the same fenced block:
+
+```bash
+# Or fetch directly, same as the uv example above:
+docker compose run --rm mcp-stdio ardupilot-refresh \
+    --url https://ardupilot.org/copter/docs/parameters.html \
+    --build-vectors
+```
+
+- [ ] **Step 5: Review the CLAUDE.md diff**
+
+Run: `git diff CLAUDE.md`
+Confirm: both new examples are additions alongside the existing `--html`
+examples (not replacements — `--html` stays documented as the offline/pinned-
+version path), and no other CLAUDE.md section (Architecture, Gotchas, Data
+bootstrap, Conventions) was touched.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add README.md CLAUDE.md
+git commit -m "docs: document --url ingest flow in README and CLAUDE.md"
 ```
 
 ---
@@ -865,6 +926,19 @@ git commit -m "docs: document --url ingest flow in README"
   → Task 5 (`test_ingest_html_path_still_requires_vehicle_and_version`).
 - Error handling (network failure, undetectable vehicle/version, both/neither
   flags) → Task 2 (network), Task 5 (detection + both/neither), Task 6 (CLI
-  mutual exclusivity).
+  mutual exclusivity + clean one-line error output instead of a traceback).
 - Shared parsing core (`parse_html`) for file and URL paths → Task 4.
-- README documentation update → Task 7.
+- README and CLAUDE.md documentation update → Task 7.
+
+## Grilling round decisions (2026-08-06)
+
+- `ingest()` returns `IngestResult` (not bare `int`) — Task 5.
+- Re-archiving an already-downloaded vehicle+version silently overwrites, no
+  `--force` flag — Task 5, unchanged from the original write.
+- `--url` auto-detection allows all four vehicles (including rover/sub,
+  which `server.py` doesn't serve yet) — Task 1/5, no restriction added.
+- Fetch timeout is a hardcoded 30s constant, no `--timeout` flag — Task 1.
+- `main()` catches `ValueError`/`RuntimeError`/`FileNotFoundError` and prints
+  a one-line `error: ...` instead of a raw traceback — Task 6.
+- CLAUDE.md's Commands and Docker sections get a `--url` example alongside
+  the existing `--html` one, not just README — Task 7.
