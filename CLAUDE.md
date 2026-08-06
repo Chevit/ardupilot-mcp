@@ -22,6 +22,12 @@ uv run python -m ardupilot_mcp.ingest \
     --firmware-version 4.8.0 \
     --source-url https://ardupilot.org/plane/docs/parameters.html \
     --build-vectors   # optional: also rebuild the semantic index for this version
+
+# Or fetch directly from ardupilot.org instead of a local file — vehicle
+# and firmware version are auto-detected from the URL/page
+uv run python -m ardupilot_mcp.ingest \
+    --url https://ardupilot.org/copter/docs/parameters.html \
+    --build-vectors
 ```
 
 Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main`,
@@ -46,6 +52,11 @@ docker compose run --rm mcp-stdio ardupilot-refresh \
     --vehicle plane \
     --firmware-version 4.8.0 \
     --source-url https://ardupilot.org/plane/docs/parameters.html \
+    --build-vectors
+
+# Or, same as above, fetch directly instead of using a locally saved file:
+docker compose run --rm mcp-stdio ardupilot-refresh \
+    --url https://ardupilot.org/copter/docs/parameters.html \
     --build-vectors
 ```
 
