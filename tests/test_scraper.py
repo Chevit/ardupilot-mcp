@@ -95,3 +95,87 @@ def test_telem_delay_renamed_between_versions(params_463, params_480):
 
     assert not any(p.name == "TELEM_DELAY" for p in params_480)
     assert any(p.name == "MAV_TELEM_DELAY" for p in params_480)
+
+
+def _write_html(tmp_path, body: str) -> Path:
+    html_path = tmp_path / "synthetic.html"
+    html_path.write_text(f"<html><body>{body}</body></html>", encoding="utf-8")
+    return html_path
+
+
+def test_malformed_heading_is_skipped(tmp_path):
+    html_path = _write_html(tmp_path, """
+        <section>
+          <h3>not a valid heading¶</h3>
+          <p>Should be skipped.</p>
+        </section>
+        <section>
+          <h3>REAL_PARAM: A real one¶</h3>
+          <p>Kept.</p>
+        </section>
+    """)
+    params = parse_html_file(html_path, vehicle="plane", firmware_version="9.9.9")
+    assert [p.name for p in params] == ["REAL_PARAM"]
+
+
+def test_heading_without_backend_suffix(tmp_path):
+    html_path = _write_html(tmp_path, """
+        <section>
+          <h3>SIMPLE_PARAM: A simple parameter¶</h3>
+          <p>Description.</p>
+        </section>
+    """)
+    params = parse_html_file(html_path, vehicle="plane", firmware_version="9.9.9")
+    assert params[0].backend is None
+
+
+def test_heading_with_backend_suffix(tmp_path):
+    html_path = _write_html(tmp_path, """
+        <section>
+          <h3>SOME_PARAM (SomeBackend): A driver-specific parameter¶</h3>
+          <p>Description.</p>
+        </section>
+    """)
+    params = parse_html_file(html_path, vehicle="plane", firmware_version="9.9.9")
+    assert params[0].backend == "SomeBackend"
+
+
+def test_range_with_to_wording_and_bare_space(tmp_path):
+    html_path = _write_html(tmp_path, """
+        <section>
+          <h3>RANGE_WITH_TO: Param A¶</h3>
+          <p>Desc.</p>
+          <table><thead><tr><th>Range</th></tr></thead>
+          <tbody><tr><td>-100 to 100</td></tr></tbody></table>
+        </section>
+        <section>
+          <h3>RANGE_BARE: Param B¶</h3>
+          <p>Desc.</p>
+          <table><thead><tr><th>Range</th></tr></thead>
+          <tbody><tr><td>0.0 1.0</td></tr></tbody></table>
+        </section>
+    """)
+    params = parse_html_file(html_path, vehicle="plane", firmware_version="9.9.9")
+    by_name = {p.name: p for p in params}
+    assert by_name["RANGE_WITH_TO"].range_min == -100
+    assert by_name["RANGE_WITH_TO"].range_max == 100
+    assert by_name["RANGE_BARE"].range_min == 0.0
+    assert by_name["RANGE_BARE"].range_max == 1.0
+
+
+def test_advanced_flag_present_and_absent(tmp_path):
+    html_path = _write_html(tmp_path, """
+        <section>
+          <h3>ADVANCED_PARAM: Param A¶</h3>
+          <div class="line-block"><div class="line"><em>Note: This parameter is for advanced users</em></div></div>
+          <p>Desc.</p>
+        </section>
+        <section>
+          <h3>PLAIN_PARAM: Param B¶</h3>
+          <p>Desc.</p>
+        </section>
+    """)
+    params = parse_html_file(html_path, vehicle="plane", firmware_version="9.9.9")
+    by_name = {p.name: p for p in params}
+    assert by_name["ADVANCED_PARAM"].advanced is True
+    assert by_name["PLAIN_PARAM"].advanced is False
