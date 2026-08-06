@@ -37,6 +37,19 @@ _HEADING_RE = re.compile(
 # "-100 to 100" | "0.0 1.0" | "0 65535"
 _RANGE_RE = re.compile(r"^\s*(-?[\d.]+)\s+(?:to\s+)?(-?[\d.]+)\s*$")
 
+# "Full Parameter List of Plane latest V4.8.0 dev" -> "4.8.0"
+_VERSION_RE = re.compile(r"\bV(\d+\.\d+\.\d+)\b")
+
+
+def detect_version(html: str) -> Optional[str]:
+    """Extract the firmware version ArduPilot's doc generator stamped on
+    the page (e.g. "...latest V4.8.0 dev" -> "4.8.0").
+
+    Returns None if no version-shaped token is found.
+    """
+    m = _VERSION_RE.search(html)
+    return m.group(1) if m else None
+
 
 def parse_html_file(
     path: Path,
@@ -44,12 +57,28 @@ def parse_html_file(
     firmware_version: str,
     source_url: Optional[str] = None,
 ) -> list[Parameter]:
-    """Parse a Sphinx-generated ArduPilot parameters HTML page.
+    """Read `path` and parse it as a Sphinx-generated ArduPilot parameters page.
 
-    Every returned Parameter is tagged with the given vehicle and
-    firmware_version so it can be stored alongside other versions.
+    Thin wrapper around `parse_html` for the local-file case; see that
+    function for the actual parsing behavior.
     """
     html = Path(path).read_text(encoding="utf-8")
+    return parse_html(html, vehicle, firmware_version, source_url)
+
+
+def parse_html(
+    html: str,
+    vehicle: str,
+    firmware_version: str,
+    source_url: Optional[str] = None,
+) -> list[Parameter]:
+    """Parse a Sphinx-generated ArduPilot parameters HTML page from a string.
+
+    Every returned Parameter is tagged with the given vehicle and
+    firmware_version so it can be stored alongside other versions. This is
+    the shared core used by both `parse_html_file` (local file) and
+    ingest.py's URL path (already-fetched text, no file needed).
+    """
     soup = BeautifulSoup(html, "lxml")
     return list(_iter_parameters(soup, vehicle, firmware_version, source_url))
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from ardupilot_mcp.scraper import parse_html_file
+from ardupilot_mcp.scraper import detect_version, parse_html_file
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "ardupilot-docs"
 FIXTURE_463 = FIXTURE_DIR / "Complete Parameter List — Plane documentation 4.6.3.html"
@@ -179,3 +179,20 @@ def test_advanced_flag_present_and_absent(tmp_path):
     by_name = {p.name: p for p in params}
     assert by_name["ADVANCED_PARAM"].advanced is True
     assert by_name["PLAIN_PARAM"].advanced is False
+
+
+def test_detect_version_finds_v_pattern():
+    html = "<h2>Full Parameter List of Plane latest V4.8.0 dev</h2>"
+    assert detect_version(html) == "4.8.0"
+
+
+def test_detect_version_returns_none_when_absent():
+    assert detect_version("<h2>Some unrelated page</h2>") is None
+
+
+def test_detect_version_real_fixture(params_480):
+    # params_480 fixture already parses FIXTURE_480; re-read the raw text
+    # directly to confirm detect_version agrees with the version the
+    # fixture was ingested under.
+    html = FIXTURE_480.read_text(encoding="utf-8")
+    assert detect_version(html) == "4.8.0"
