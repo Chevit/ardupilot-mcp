@@ -63,6 +63,7 @@ mutually exclusive, required argparse group; `ingest()` itself raises
 `ValueError` if both or neither are given, for callers that skip the CLI).
 
 **URL path:**
+
 1. `html = fetch_url(url)`.
 2. `vehicle = vehicle or detect_vehicle_from_url(url)` — raise `ValueError`
    if still `None`.
@@ -139,3 +140,9 @@ style:
   appear.
 - Existing `parse_html_file`/`parse_html` tests unchanged — parsing logic is
   relocated, not modified.
+
+## Documentation
+
+README documents the manual-download ingest flow (`--html` usage) — once
+implementation lands, run the `/documentation:update-readme` skill to fold
+in the new `--url` flag and auto-detect behavior so README stays accurate.
