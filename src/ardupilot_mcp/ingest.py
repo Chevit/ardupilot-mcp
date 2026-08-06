@@ -199,35 +199,52 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Ingest an ArduPilot parameter reference HTML file into SQLite.",
     )
-    parser.add_argument("--html", required=True, type=Path,
-                        help="Path to the parameters HTML file")
-    parser.add_argument("--vehicle", required=True,
-                        choices=["plane", "copter", "rover", "sub"])
-    parser.add_argument("--firmware-version", required=True,
-                        help="Firmware version string, e.g. 4.8.0 or 4.6.3")
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--html", type=Path,
+                               help="Path to the parameters HTML file")
+    source_group.add_argument("--url",
+                               help="URL to fetch the parameters page from directly, "
+                                    "e.g. https://ardupilot.org/copter/docs/parameters.html")
+    parser.add_argument("--vehicle", default=None,
+                         choices=["plane", "copter", "rover", "sub"],
+                         help="Required with --html; auto-detected from --url if omitted")
+    parser.add_argument("--firmware-version", default=None,
+                         help="Required with --html; auto-detected from the page "
+                              "if --url is used and this is omitted")
     parser.add_argument("--source-url", default=None,
-                        help="Canonical URL to record with each row")
+                         help="Canonical URL to record with each row "
+                              "(defaults to --url if given)")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH,
-                        help="SQLite DB path")
+                         help="SQLite DB path")
     parser.add_argument("--build-vectors", action="store_true",
-                        help="Also rebuild the semantic index for this version")
+                         help="Also rebuild the semantic index for this version")
     parser.add_argument("--vectors-path", type=Path, default=None,
-                        help="LanceDB directory (defaults to data/vectors.lance)")
+                         help="LanceDB directory (defaults to data/vectors.lance)")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args(argv)
 
-    n = ingest(
-        html_path=args.html,
-        vehicle=args.vehicle,
-        firmware_version=args.firmware_version,
-        source_url=args.source_url,
-        db_path=args.db,
-        build_vectors=args.build_vectors,
-        vectors_path=args.vectors_path,
-        verbose=not args.quiet,
-    )
-    print(f"ingested {n} parameters ({args.vehicle} {args.firmware_version}) "
-          f"-> {args.db}")
+    try:
+        result = ingest(
+            html_path=args.html,
+            url=args.url,
+            vehicle=args.vehicle,
+            firmware_version=args.firmware_version,
+            source_url=args.source_url,
+            db_path=args.db,
+            build_vectors=args.build_vectors,
+            vectors_path=args.vectors_path,
+            verbose=not args.quiet,
+        )
+    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+        # Non-technical Docker users are the primary audience (per README) —
+        # a bare traceback is the wrong default here. ingest()'s own
+        # ValueError/RuntimeError messages are already written to be
+        # actionable on their own (see _fetch_and_archive).
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"ingested {result.count} parameters "
+          f"({result.vehicle} {result.firmware_version}) -> {args.db}")
     return 0
 
 

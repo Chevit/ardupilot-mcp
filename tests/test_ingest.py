@@ -86,3 +86,34 @@ def test_ingest_html_path_still_requires_vehicle_and_version(tmp_path):
     html_path.write_text("<html></html>", encoding="utf-8")
     with pytest.raises(ValueError, match="--vehicle and --firmware-version"):
         ingest(html_path=html_path)
+
+
+from ardupilot_mcp.ingest import main
+
+
+def test_main_rejects_both_html_and_url_flags(capsys):
+    with pytest.raises(SystemExit):
+        main([
+            "--html", "x.html", "--url", "https://example.test/parameters.html",
+            "--vehicle", "plane", "--firmware-version", "1.0",
+        ])
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_main_rejects_neither_html_nor_url_flag(capsys):
+    with pytest.raises(SystemExit):
+        main([])
+    assert "one of the arguments --html --url is required" in capsys.readouterr().err
+
+
+def test_main_prints_clean_error_instead_of_traceback(tmp_path, capsys):
+    # A missing --html path makes ingest() raise FileNotFoundError. main()
+    # must catch it, print a one-line message, and return 1 — not let the
+    # exception propagate as a raw traceback (this tool's audience per
+    # README is explicitly non-technical Docker users).
+    missing = tmp_path / "does-not-exist.html"
+    exit_code = main([
+        "--html", str(missing), "--vehicle", "plane", "--firmware-version", "1.0",
+    ])
+    assert exit_code == 1
+    assert capsys.readouterr().err.startswith("error:")
