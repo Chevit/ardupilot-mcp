@@ -8,21 +8,32 @@ let ingest.py skip the manual "download the page, guess the flags" step.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Iterable, Optional
 
 import httpx
 
-# "https://ardupilot.org/copter/docs/parameters.html" -> "copter"
-_VEHICLE_URL_RE = re.compile(r"/(plane|copter|rover|sub)/docs/parameters")
+from .roster import load_roster
 
 
-def detect_vehicle_from_url(url: str) -> Optional[str]:
+def detect_vehicle_from_url(
+    url: str, vehicle_names: Optional[Iterable[str]] = None
+) -> Optional[str]:
     """Extract the vehicle segment from an ardupilot.org parameters URL.
 
+    `vehicle_names` bounds which names count as a match — defaults to the
+    Vehicle Roster's keys (see roster.py) so this stays in sync with
+    whatever vehicles the roster knows about, without a hardcoded list
+    (see docs/adr/0002-vehicle-roster-owns-the-vehicle-list.md).
+
     Returns None if the URL doesn't match the expected
-    "/<vehicle>/docs/parameters..." shape.
+    "/<vehicle>/docs/parameters..." shape for a known vehicle name.
     """
-    m = _VEHICLE_URL_RE.search(url)
+    if vehicle_names is None:
+        vehicle_names = load_roster().keys()
+    pattern = "|".join(re.escape(name) for name in vehicle_names)
+    if not pattern:
+        return None
+    m = re.search(rf"/({pattern})/docs/parameters", url)
     return m.group(1) if m else None
 
 

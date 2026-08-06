@@ -1,14 +1,17 @@
 """SQLite schema and query layer for the ArduPilot MCP server.
 
-Stores parameter metadata for one or more ArduPilot vehicles across multiple
-firmware versions. FTS5 provides keyword search; vectors live in LanceDB
-(see vectors.py) and reference parameters.id.
+Stores parameter metadata for the Vehicles in the Vehicle Roster (see
+roster.py), one firmware version at a time per vehicle — see
+docs/adr/0001-single-firmware-version-per-vehicle.md. FTS5 provides keyword
+search; vectors live in LanceDB (see vectors.py) and reference parameters.id.
 
-Uniqueness: (vehicle, firmware_version, name, backend).
+Uniqueness: (vehicle, name, backend).
   - `backend` is NULL for the primary definition of a parameter and
     non-NULL for driver variants (e.g. AP_BattMonitor_Analog vs SMBus).
-  - `firmware_version` is a free-form string like '4.8.0' or '4.6.3'.
-    Ingest the same HTML file under different versions to keep both.
+  - `firmware_version` is provenance only, not part of the key — it is
+    whatever version the Vehicle Roster's URL last pointed at for that
+    vehicle. Re-ingesting a vehicle replaces its rows wholesale, regardless
+    of whether the firmware_version changed.
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ CREATE TABLE IF NOT EXISTS parameters (
     advanced         INTEGER NOT NULL DEFAULT 0,
     source_url       TEXT,
     scraped_at       TEXT,
-    UNIQUE (vehicle, firmware_version, name, backend)
+    UNIQUE (vehicle, name, backend)
 );
 CREATE INDEX IF NOT EXISTS idx_parameters_name    ON parameters(name);
 CREATE INDEX IF NOT EXISTS idx_parameters_section ON parameters(section);
@@ -150,16 +153,14 @@ def init_schema(db_path: Path = DEFAULT_DB_PATH) -> None:
         conn.executescript(SCHEMA)
 
 
-def reset_vehicle_version(
-    conn: sqlite3.Connection, vehicle: str, firmware_version: str
-) -> None:
-    """Wipe all rows for a (vehicle, firmware_version) pair before a re-ingest.
+def reset_vehicle(conn: sqlite3.Connection, vehicle: str) -> None:
+    """Wipe all rows for a vehicle before a re-ingest.
 
-    Only touches the requested version — other versions remain intact.
+    Only touches the requested vehicle — other vehicles remain intact.
     """
     ids = [r[0] for r in conn.execute(
-        "SELECT id FROM parameters WHERE vehicle = ? AND firmware_version = ?",
-        (vehicle, firmware_version),
+        "SELECT id FROM parameters WHERE vehicle = ?",
+        (vehicle,),
     )]
     if not ids:
         return
@@ -168,18 +169,20 @@ def reset_vehicle_version(
         f"DELETE FROM parameters_fts WHERE rowid IN ({placeholders})", ids
     )
     conn.execute(
-        "DELETE FROM parameters WHERE vehicle = ? AND firmware_version = ?",
-        (vehicle, firmware_version),
+        "DELETE FROM parameters WHERE vehicle = ?",
+        (vehicle,),
     )
 
 
-def list_versions(conn: sqlite3.Connection, vehicle: str) -> list[str]:
-    """Return the distinct firmware_version values ingested for a vehicle."""
-    return [r[0] for r in conn.execute(
-        """SELECT DISTINCT firmware_version FROM parameters
-           WHERE vehicle = ? ORDER BY firmware_version""",
+def ingested_version(conn: sqlite3.Connection, vehicle: str) -> Optional[str]:
+    """The single firmware_version stored for a vehicle, or None if it has
+    never been ingested. Provenance lookup, not a query filter — see
+    docs/adr/0001-single-firmware-version-per-vehicle.md."""
+    row = conn.execute(
+        "SELECT firmware_version FROM parameters WHERE vehicle = ? LIMIT 1",
         (vehicle,),
-    )]
+    ).fetchone()
+    return row["firmware_version"] if row is not None else None
 
 
 def upsert_parameter(
@@ -188,12 +191,14 @@ def upsert_parameter(
     """Insert (or replace) a parameter and its values. Returns the row id.
 
     IS used for backend comparison because NULL != NULL under equality.
+    Matches on (vehicle, name, backend) only — firmware_version is
+    provenance, not part of the key, so upserting a new version of an
+    already-stored parameter replaces it regardless of the old value.
     """
     conn.execute(
         """DELETE FROM parameters
-           WHERE vehicle = ? AND firmware_version = ?
-             AND name = ? AND backend IS ?""",
-        (param.vehicle, param.firmware_version, param.name, param.backend),
+           WHERE vehicle = ? AND name = ? AND backend IS ?""",
+        (param.vehicle, param.name, param.backend),
     )
     cur = conn.execute(
         """

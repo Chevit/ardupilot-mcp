@@ -3,10 +3,10 @@
 Embeds parameter descriptions with `intfloat/multilingual-e5-small` (384-dim,
 ~120 MB, multilingual including Ukrainian) and stores them in LanceDB.
 
-The vector table holds ONE firmware version at a time. Rebuilding replaces
-the table entirely. This matches the design decision to only semantic-index
-the latest ArduPilot version — FTS in SQLite covers older versions for
-exact/keyword lookups.
+The vector table holds every Vehicle at once, one firmware version per
+Vehicle (see docs/adr/0001-single-firmware-version-per-vehicle.md).
+Rebuilding a Vehicle replaces only that Vehicle's rows, leaving the rest of
+the table intact — see rebuild().
 
 Note on e5 models: they require task-specific prefixes for correct behaviour.
   - passages being indexed:  "passage: {text}"
@@ -19,13 +19,12 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Optional, Sequence, TYPE_CHECKING
 
 import lancedb
 import pyarrow as pa
-from lancedb.expr import col, lit
 
-from .db import DEFAULT_DB_PATH, connect, list_versions
+from .db import DEFAULT_DB_PATH, connect, ingested_version
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -108,6 +107,11 @@ class VectorStore:
     def _has_table(self) -> bool:
         return TABLE_NAME in self._db.list_tables().tables
 
+    @staticmethod
+    def _sql_quote(value: str) -> str:
+        """Escape a value for embedding in a LanceDB SQL-style filter string."""
+        return value.replace("'", "''")
+
     # -- model management (lazy) -- #
     @property
     def model(self) -> "SentenceTransformer":
@@ -139,38 +143,21 @@ class VectorStore:
     def rebuild(
         self,
         rows: list[dict[str, Any]],
+        vehicle: str,
         encoder: Optional[Encoder] = None,
     ) -> int:
-        """Drop the current table (if any) and reindex from scratch.
+        """Replace one vehicle's slice of the index; every other vehicle's
+        rows are left untouched.
 
         Each input row must contain:
             param_id (int), name (str), vehicle (str),
             firmware_version (str), text (str)
+        All rows must belong to `vehicle` — this is a per-vehicle replace,
+        not a general-purpose bulk load.
 
         `text` is what gets embedded and is NOT retained after this call.
         If `encoder` is None, the real e5 model is used.
         """
-        if not rows:
-            if self._has_table():
-                self._db.drop_table(TABLE_NAME)
-            return 0
-
-        texts = [r["text"] for r in rows]
-        if encoder is None:
-            vectors = self._encode_passages(texts)
-        else:
-            vectors = encoder(texts)
-
-        records: list[dict[str, Any]] = []
-        for r, v in zip(rows, vectors):
-            records.append({
-                "param_id": int(r["param_id"]),
-                "name": r["name"],
-                "vehicle": r["vehicle"],
-                "firmware_version": r["firmware_version"],
-                "vector": v,
-            })
-
         schema = pa.schema([
             ("param_id",         pa.int64()),
             ("name",             pa.string()),
@@ -179,9 +166,28 @@ class VectorStore:
             ("vector",           pa.list_(pa.float32(), EMBEDDING_DIM)),
         ])
 
+        records: list[dict[str, Any]] = []
+        if rows:
+            texts = [r["text"] for r in rows]
+            vectors = self._encode_passages(texts) if encoder is None else encoder(texts)
+            for r, v in zip(rows, vectors):
+                records.append({
+                    "param_id": int(r["param_id"]),
+                    "name": r["name"],
+                    "vehicle": r["vehicle"],
+                    "firmware_version": r["firmware_version"],
+                    "vector": v,
+                })
+
         if self._has_table():
-            self._db.drop_table(TABLE_NAME)
-        self._db.create_table(TABLE_NAME, data=records, schema=schema)
+            table = self._db.open_table(TABLE_NAME)
+            table.delete(f"vehicle = '{self._sql_quote(vehicle)}'")
+            if records:
+                table.add(records)
+        elif records:
+            self._db.create_table(TABLE_NAME, data=records, schema=schema)
+        # else: no table yet and nothing to add — nothing to do.
+
         return len(records)
 
     # -- querying -- #
@@ -189,10 +195,13 @@ class VectorStore:
         self,
         query: str,
         k: int = 5,
-        firmware_version: Optional[str] = None,
+        vehicles: Optional[Sequence[str]] = None,
         encoder: Optional[Encoder] = None,
     ) -> list[dict[str, Any]]:
         """Return the top-k passages nearest to `query`.
+
+        `vehicles`: restrict to these vehicle names, or None to search
+        every vehicle present in the index.
 
         Each result is a dict with `param_id`, `name`, `vehicle`,
         `firmware_version`, and `_distance` (LanceDB's cosine distance).
@@ -207,8 +216,9 @@ class VectorStore:
             qvec = encoder([query])[0]
 
         q = table.search(qvec).limit(k)
-        if firmware_version:
-            q = q.where(col("firmware_version") == lit(firmware_version))
+        if vehicles is not None:
+            quoted = ", ".join(f"'{self._sql_quote(v)}'" for v in vehicles)
+            q = q.where(f"vehicle IN ({quoted})")
         return q.to_list()
 
 
@@ -218,23 +228,22 @@ class VectorStore:
 
 def rebuild_from_db(
     store: VectorStore,
+    vehicle: str,
     db_path=DEFAULT_DB_PATH,
-    vehicle: str = "plane",
-    firmware_version: Optional[str] = None,
     encoder: Optional[Encoder] = None,
     verbose: bool = False,
 ) -> int:
-    """(Re)build the vector index from SQLite.
+    """(Re)build one vehicle's slice of the vector index from SQLite.
 
-    If `firmware_version` is None, uses the highest version present for
-    the vehicle (lexicographic sort — works for semver-like strings).
+    Only `vehicle`'s rows in the index are replaced — every other vehicle's
+    vectors are left untouched (VectorStore.rebuild()). Uses whatever
+    firmware_version is currently stored for `vehicle` — there is exactly
+    one per docs/adr/0001-single-firmware-version-per-vehicle.md.
     """
     with connect(db_path) as conn:
+        firmware_version = ingested_version(conn, vehicle)
         if firmware_version is None:
-            versions = list_versions(conn, vehicle)
-            if not versions:
-                raise ValueError(f"No firmware versions ingested for {vehicle!r}")
-            firmware_version = versions[-1]
+            raise ValueError(f"{vehicle!r} has not been ingested")
 
         param_rows = conn.execute(
             """SELECT id, vehicle, firmware_version, name,
@@ -284,7 +293,7 @@ def rebuild_from_db(
             f"({vehicle} {firmware_version}) with {store.model_name}",
             file=sys.stderr,
         )
-    n = store.rebuild(rows, encoder=encoder)
+    n = store.rebuild(rows, vehicle=vehicle, encoder=encoder)
     if verbose:
         print(f"[vectors] wrote {n} vectors -> {store.path}", file=sys.stderr)
     return n

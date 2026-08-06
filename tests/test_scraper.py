@@ -1,10 +1,23 @@
 """Tests for the ArduPilot parameter HTML scraper.
 
-Golden tests run against the real HTML files in data/ardupilot-docs/ (no
-synthetic copies — the fixture IS the thing that changes upstream, which is
-exactly what these tests should react to). Edge-case tests use small
-synthetic HTML snippets to pin regex/branch behavior independent of
-whatever the current real docs happen to exercise.
+Golden tests run against the real HTML files in tests/fixtures/ (no synthetic
+copies — the fixture IS the thing that changes upstream, which is exactly
+what these tests should react to). Edge-case tests use small synthetic HTML
+snippets to pin regex/branch behavior independent of whatever the current
+real docs happen to exercise.
+
+tests/fixtures/ is gitignored (multi-MB HTML) and not shared with the
+data/ardupilot-docs/ dir that `ardupilot-refresh` writes/reads — ingest
+runs must not silently change what these tests assert against. Regenerate
+the fixtures with:
+
+    scripts/fetch_test_fixtures.sh
+
+4.6.3 is pinned to a stable, versioned URL and never changes upstream. 4.8.0
+is the current stable and has no versioned URL to pin to (ArduPilot only
+publishes parameters-<Vehicle>-stable-V<x.y.z>.html for superseded
+versions) — its golden count is expected to need re-pinning when 4.8.0 is
+itself superseded and upstream content shifts.
 """
 
 from __future__ import annotations
@@ -15,18 +28,25 @@ import pytest
 
 from ardupilot_mcp.scraper import detect_version, parse_html_file
 
-FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "ardupilot-docs"
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 FIXTURE_463 = FIXTURE_DIR / "Complete Parameter List — Plane documentation 4.6.3.html"
 FIXTURE_480 = FIXTURE_DIR / "Complete Parameter List — Plane documentation 4.8.0.html"
+
+_missing_fixtures = not (FIXTURE_463.exists() and FIXTURE_480.exists())
+_skip_reason = "golden fixtures missing; run scripts/fetch_test_fixtures.sh"
 
 
 @pytest.fixture(scope="module")
 def params_463():
+    if _missing_fixtures:
+        pytest.skip(_skip_reason)
     return parse_html_file(FIXTURE_463, vehicle="plane", firmware_version="4.6.3")
 
 
 @pytest.fixture(scope="module")
 def params_480():
+    if _missing_fixtures:
+        pytest.skip(_skip_reason)
     return parse_html_file(FIXTURE_480, vehicle="plane", firmware_version="4.8.0")
 
 
@@ -57,7 +77,7 @@ def test_pinned_parameter_count_463(params_463):
 
 
 def test_pinned_parameter_count_480(params_480):
-    assert len(params_480) == 5596
+    assert len(params_480) == 5613
 
 
 def test_rc_options_bitmask_grows_between_versions(params_463, params_480):
