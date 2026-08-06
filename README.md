@@ -82,7 +82,7 @@ Sphinx HTML-документації параметрів ArduPilot.
    Перший раз це триває кілька хвилин. Дочекайтеся завершення.
 
 3. Завантажте дані параметрів — одна команда тягне всі увімкнені апарати з Реєстру апаратів
-   (`plane`, `copter`, `rover`, `sub` за замовчуванням) напряму з ardupilot.org:
+   (`plane` і `copter` за замовчуванням) напряму з ardupilot.org:
 
    ```bash
    docker compose run --rm mcp-stdio ardupilot-refresh --all --build-vectors
@@ -274,8 +274,8 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
 ## Реєстр апаратів (Vehicle Roster)
 
 Які апарати існують, їхні URL-джерела та чи тягне їх `--all` — усе це живе у **Реєстрі апаратів**
-(`vehicles.json`, запакований разом із застосунком). З коробки шість апаратів: `plane`, `copter`,
-`rover`, `sub` увімкнені; `blimp` і `antennatracker` присутні, але вимкнені.
+(`vehicles.json`, запакований разом із застосунком). З коробки шість апаратів: `plane` і `copter`
+увімкнені; `rover`, `sub`, `blimp` і `antennatracker` присутні, але вимкнені.
 
 Щоб змінити URL, зафіксувати апарат на старішій версії прошивки (ArduPilot публікує версіоновані
 сторінки на кшталт `parameters-Copter-stable-V4.7.0.html` для попередніх релізів) або
@@ -426,7 +426,7 @@ Every command below gets typed into that terminal window, one at a time, followe
    This takes a few minutes the first time. Wait for it to finish.
 
 3. Load parameter data — one command fetches every enabled vehicle on the Vehicle Roster
-   (`plane`, `copter`, `rover`, `sub` by default) directly from ardupilot.org:
+   (`plane` and `copter` by default) directly from ardupilot.org:
 
    ```bash
    docker compose run --rm mcp-stdio ardupilot-refresh --all --build-vectors
@@ -616,8 +616,8 @@ Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main
 ## The Vehicle Roster
 
 Which vehicles exist, their source URLs, and whether `--all` fetches them live in the **Vehicle
-Roster** — `vehicles.json`, packaged with the app. Ships with six vehicles: `plane`, `copter`,
-`rover`, `sub` enabled; `blimp` and `antennatracker` present but disabled.
+Roster** — `vehicles.json`, packaged with the app. Ships with six vehicles: `plane` and `copter`
+enabled; `rover`, `sub`, `blimp` and `antennatracker` present but disabled.
 
 To change a URL, pin a vehicle to an older firmware version (ArduPilot publishes versioned pages
 like `parameters-Copter-stable-V4.7.0.html` for superseded releases), or enable/disable a vehicle:
