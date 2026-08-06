@@ -115,10 +115,17 @@ class VectorStore:
             )
         return self._model
 
-    def _default_encoder(self, texts: list[str], task: str) -> list[list[float]]:
-        """Encode with the e5 prefix appropriate for the task."""
-        prefix = "query: " if task == "query" else "passage: "
-        prefixed = [prefix + t for t in texts]
+    def _encode_passages(self, texts: list[str]) -> list[list[float]]:
+        """Encode passages for indexing, with the e5 'passage:' prefix."""
+        prefixed = ["passage: " + t for t in texts]
+        arr = self.model.encode(
+            prefixed, batch_size=64, show_progress_bar=False, convert_to_numpy=True
+        )
+        return [row.tolist() for row in arr]
+
+    def _encode_queries(self, texts: list[str]) -> list[list[float]]:
+        """Encode queries for search, with the e5 'query:' prefix."""
+        prefixed = ["query: " + t for t in texts]
         arr = self.model.encode(
             prefixed, batch_size=64, show_progress_bar=False, convert_to_numpy=True
         )
@@ -146,7 +153,7 @@ class VectorStore:
 
         texts = [r["text"] for r in rows]
         if encoder is None:
-            vectors = self._default_encoder(texts, task="passage")
+            vectors = self._encode_passages(texts)
         else:
             vectors = encoder(texts)
 
@@ -191,7 +198,7 @@ class VectorStore:
         table = self._db.open_table(TABLE_NAME)
 
         if encoder is None:
-            qvec = self._default_encoder([query], task="query")[0]
+            qvec = self._encode_queries([query])[0]
         else:
             qvec = encoder([query])[0]
 
