@@ -37,6 +37,19 @@ _HEADING_RE = re.compile(
 # "-100 to 100" | "0.0 1.0" | "0 65535"
 _RANGE_RE = re.compile(r"^\s*(-?[\d.]+)\s+(?:to\s+)?(-?[\d.]+)\s*$")
 
+# "Full Parameter List of Plane latest V4.8.0 dev" -> "4.8.0"
+_VERSION_RE = re.compile(r"\bV(\d+\.\d+\.\d+)\b")
+
+
+def detect_version(html: str) -> Optional[str]:
+    """Extract the firmware version ArduPilot's doc generator stamped on
+    the page (e.g. "...latest V4.8.0 dev" -> "4.8.0").
+
+    Returns None if no version-shaped token is found.
+    """
+    m = _VERSION_RE.search(html)
+    return m.group(1) if m else None
+
 
 def parse_html_file(
     path: Path,
