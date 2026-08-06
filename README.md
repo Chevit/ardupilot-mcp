@@ -88,8 +88,15 @@ Sphinx HTML-документації параметрів ArduPilot.
    docker compose run --rm mcp-stdio ardupilot-refresh --all --build-vectors
    ```
 
-   Апарат і версія прошивки визначаються автоматично. Потрібен лише один апарат, або сторінка,
-   якої немає в реєстрі?
+   Апарат і версія прошивки визначаються автоматично. Потрібні лише окремі апарати з реєстру —
+   назвіть їх через `--roster` (працює й для апаратів із `enabled: false`, які пропускає `--all`):
+
+   ```bash
+   docker compose run --rm mcp-stdio ardupilot-refresh --roster plane --build-vectors
+   docker compose run --rm mcp-stdio ardupilot-refresh --roster plane copter --build-vectors
+   ```
+
+   Потрібна сторінка, якої немає в реєстрі?
 
    ```bash
    docker compose run --rm mcp-stdio ardupilot-refresh --url https://ardupilot.org/plane/docs/parameters.html --build-vectors
@@ -260,7 +267,8 @@ uv run python -m ardupilot_mcp.ingest --all --build-vectors
 uv run python -m ardupilot_mcp.server
 ```
 
-`--all` тягне всі увімкнені апарати з Реєстру апаратів. Для одного апарата апарат і версія
+`--all` тягне всі увімкнені апарати з Реєстру апаратів; `--roster plane copter` — лише названі
+(будь-які імена з реєстру, навіть вимкнені). Для сторінки поза реєстром апарат і версія
 прошивки визначаються автоматично з URL і тексту сторінки: `uv run python -m ardupilot_mcp.ingest
 --url https://ardupilot.org/plane/docs/parameters.html --build-vectors`. Передайте
 `--vehicle`/`--firmware-version`, щоб перевизначити, або замініть `--url <url>` на `--html
@@ -283,9 +291,14 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
 монтує) — він повністю замінює запакований реєстр, тож включіть у нього всі апарати, які вам ще
 потрібні. `--vehicles-config PATH` вибирає файл реєстру поза `data/` для одного запуску.
 
-Запис `enabled: false` впливає лише на `--all` — `ardupilot-refresh --url ... --vehicle blimp`
-все одно імпортує його як свідомий разовий виняток, і після імпорту він лишається доступним за
-іменем; його просто виключено з пошукових інструментів із необмеженою областю (`vehicle=None`).
+Запис `enabled: false` впливає лише на `--all` — `ardupilot-refresh --roster blimp` (або
+`--url ... --vehicle blimp`) все одно імпортує його як свідомий разовий виняток, і після імпорту
+він лишається доступним за іменем; його просто виключено з пошукових інструментів із необмеженою
+областю (`vehicle=None`).
+
+Імена для `--roster` перевіряються за завантаженим реєстром, а не за жорстко зашитим списком —
+тож апарат, доданий у ваш `data/vehicles.json`, одразу доступний для `--roster`. Помилка в імені
+зупиняє весь запуск ще до першого звернення до мережі й показує повний список імен реєстру.
 
 ## MCP-інструменти
 
@@ -314,8 +327,8 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
   (`detect_vehicle_from_url`, звіряється з іменами в Реєстрі апаратів) для шляхів імпорту
   `--url`/`--all`.
 - `src/ardupilot_mcp/ingest.py` — оркеструє scrape → запис у SQLite → опційну перебудову векторів.
-  Точка входу CLI; `--all` проходить по увімкнених апаратах Реєстру та перебудовує вектори один
-  раз наприкінці.
+  Точка входу CLI; `--all` проходить по увімкнених апаратах Реєстру, `--roster NAME...` — лише по
+  названих, і обидва перебудовують вектори один раз наприкінці.
 - `src/ardupilot_mcp/vectors.py` — шар семантичного пошуку на LanceDB, що тримає всі апарати
   одночасно.
 - `src/ardupilot_mcp/catalog.py` — шов, через який усі шість інструментів звертаються до SQLite,
@@ -432,8 +445,16 @@ Every command below gets typed into that terminal window, one at a time, followe
    docker compose run --rm mcp-stdio ardupilot-refresh --all --build-vectors
    ```
 
-   Vehicle and firmware version are detected automatically. Only want one vehicle, or a page
-   the roster doesn't already list?
+   Vehicle and firmware version are detected automatically. Only want some of the roster's
+   vehicles? Name them with `--roster` (this works for vehicles marked `enabled: false` too,
+   which only `--all` skips):
+
+   ```bash
+   docker compose run --rm mcp-stdio ardupilot-refresh --roster plane --build-vectors
+   docker compose run --rm mcp-stdio ardupilot-refresh --roster plane copter --build-vectors
+   ```
+
+   Want a page the roster doesn't already list?
 
    ```bash
    docker compose run --rm mcp-stdio ardupilot-refresh --url https://ardupilot.org/plane/docs/parameters.html --build-vectors
@@ -603,8 +624,9 @@ uv run python -m ardupilot_mcp.ingest --all --build-vectors
 uv run python -m ardupilot_mcp.server
 ```
 
-`--all` fetches every enabled vehicle on the Vehicle Roster. For a single vehicle, vehicle and
-firmware version are auto-detected from the URL and page text: `uv run python -m
+`--all` fetches every enabled vehicle on the Vehicle Roster; `--roster plane copter` fetches only
+the ones you name (any name in the roster, disabled ones included). For a page that isn't on the
+roster, vehicle and firmware version are auto-detected from the URL and page text: `uv run python -m
 ardupilot_mcp.ingest --url https://ardupilot.org/plane/docs/parameters.html --build-vectors`. Pass
 `--vehicle`/`--firmware-version` to override, or swap `--url <url>` for `--html "<path>" --vehicle
 plane --firmware-version 4.8.0 --source-url https://ardupilot.org/plane/docs/parameters.html` to
@@ -625,9 +647,13 @@ drop your own `vehicles.json` into `data/` (the directory Docker already bind-mo
 replaces the packaged roster, so include every vehicle you still want. `--vehicles-config PATH`
 picks a roster file outside `data/` for a single invocation.
 
-An `enabled: false` entry only affects `--all` — `ardupilot-refresh --url ... --vehicle blimp`
-still ingests it as a deliberate one-off, and once ingested it stays queryable by name; it's just
-excluded from the unscoped `vehicle=None` search tools.
+An `enabled: false` entry only affects `--all` — `ardupilot-refresh --roster blimp` (or
+`--url ... --vehicle blimp`) still ingests it as a deliberate one-off, and once ingested it stays
+queryable by name; it's just excluded from the unscoped `vehicle=None` search tools.
+
+`--roster` names are checked against the roster you actually loaded, not a hardcoded list, so a
+vehicle you add to your own `data/vehicles.json` can be named right away. A misspelled name stops
+the whole run before anything is fetched and prints the roster's full list of names.
 
 ## MCP tools
 
@@ -655,7 +681,8 @@ excluded from the unscoped `vehicle=None` search tools.
   (`detect_vehicle_from_url`, matched against the Vehicle Roster's names) for the `--url`/`--all`
   ingest paths.
 - `src/ardupilot_mcp/ingest.py` — orchestrates scrape → SQLite write → optional vector rebuild.
-  CLI entry point; `--all` loops the Roster's enabled vehicles and rebuilds vectors once at the end.
+  CLI entry point; `--all` loops the Roster's enabled vehicles and `--roster NAME...` only the ones
+  named, both rebuilding vectors once at the end.
 - `src/ardupilot_mcp/vectors.py` — LanceDB-backed semantic search layer, holding every vehicle at
   once.
 - `src/ardupilot_mcp/catalog.py` — the seam through which all six tools query the SQLite + vector

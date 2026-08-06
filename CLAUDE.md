@@ -9,16 +9,24 @@ SQLite + LanceDB store, scraped from ArduPilot's Sphinx-generated HTML parameter
 
 ## Commands
 
-Package manager is `uv`. No dedicated test suite exists yet.
+Package manager is `uv`. Tests live in `tests/` and run with `uv run pytest`.
 
 ```bash
 # Run the MCP server (stdio transport, for manual testing / Claude Desktop)
 uv run python -m ardupilot_mcp.server
 
+# Run the test suite
+uv run pytest
+
 # Ingest every enabled vehicle on the Vehicle Roster in one call — vehicle
 # and firmware version are auto-detected per vehicle, vectors rebuilt once
 # at the end covering every vehicle that succeeded
 uv run python -m ardupilot_mcp.ingest --all --build-vectors
+
+# Or only some of the Roster's vehicles — identical behaviour to --all,
+# just scoped to the names given (order preserved, duplicates collapsed)
+uv run python -m ardupilot_mcp.ingest --roster plane --build-vectors
+uv run python -m ardupilot_mcp.ingest --roster plane copter --build-vectors
 
 # Or ingest a single vehicle by fetching directly from ardupilot.org
 uv run python -m ardupilot_mcp.ingest \
@@ -59,7 +67,10 @@ docker compose build
 # bind-mounted ./data
 docker compose run --rm mcp-stdio ardupilot-refresh --all --build-vectors
 
-# Or a single vehicle:
+# Or only some of the Roster's vehicles:
+docker compose run --rm mcp-stdio ardupilot-refresh --roster plane --build-vectors
+
+# Or a single page not on the Roster:
 docker compose run --rm mcp-stdio ardupilot-refresh \
     --url https://ardupilot.org/copter/docs/parameters.html \
     --build-vectors
@@ -115,6 +126,8 @@ VPN, or behind a reverse proxy that adds auth.
 - `ingest.py` — orchestrates scrape → SQLite write → optional vector rebuild. CLI entry point.
   `--all` loops the Roster's enabled vehicles, continuing past a failed one, and rebuilds vectors
   once at the end (not once per vehicle — avoids reloading the embedding model repeatedly).
+  `--roster NAME...` is the same loop scoped to the named vehicles — both go through
+  `ingest_all()`, which takes `vehicles: list[str] | None` (`None` = every enabled vehicle).
 - `vectors.py` — LanceDB-backed semantic search layer using `intfloat/multilingual-e5-small`.
   One table holds every vehicle; `rebuild()` replaces only the given vehicle's slice.
 - `catalog.py` — the seam through which all six tools query SQLite + the vector store + the
@@ -138,8 +151,15 @@ VPN, or behind a reverse proxy that adds auth.
   `lookup_parameter`/`list_parameters`/`diff_parameter` require an explicit vehicle string; there
   is no default.
 - **`enabled: false` on the Roster only affects `--all`** — an explicit `--vehicle blimp` ingest,
-  or an explicit `vehicle="blimp"` query, still works. Only the unscoped `vehicle=None` search
-  tools skip disabled vehicles.
+  `--roster blimp`, or an explicit `vehicle="blimp"` query, still works. Only the unscoped
+  `vehicle=None` search tools skip disabled vehicles.
+- **`--roster` names are validated against the loaded Roster, not a hardcoded list** — so a
+  `data/vehicles.json` override that adds a vehicle can be `--roster`'d immediately (ADR 0002).
+  A typo aborts the whole run *before* any fetch, so the correctly-spelled vehicles in the same
+  invocation don't get downloaded and then thrown away.
+- **`--vehicle`/`--firmware-version`/`--source-url` are rejected with `--all`/`--roster`**, not
+  ignored — each vehicle's URL comes from the Roster and its version from the fetched page, so
+  accepting them silently would look like they took effect.
 - **Semantic `vehicle=None` dedups by parameter name** — over-fetches `k * 4` candidates across
   enabled vehicles, then collapses same-named matches into one result carrying a `vehicles` list,
   so the returned count is an approximate `k`, not exact.

@@ -17,12 +17,14 @@ from ardupilot_mcp.roster import (
 )
 
 
-def test_packaged_roster_has_six_vehicles_four_enabled():
+def test_packaged_roster_has_six_vehicles_two_enabled():
     roster = load_roster()
     assert set(roster) == {
         "plane", "copter", "rover", "sub", "blimp", "antennatracker",
     }
-    assert enabled_vehicles(roster) == ["copter", "plane", "rover", "sub"]
+    # Only plane and copter are fetched by --all out of the box; the rest
+    # ship present-but-disabled, reachable via --roster or --vehicle.
+    assert enabled_vehicles(roster) == ["copter", "plane"]
     assert roster["blimp"].enabled is False
     assert roster["plane"].url == "https://ardupilot.org/plane/docs/parameters.html"
 

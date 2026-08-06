@@ -6,10 +6,14 @@ docs/adr/0001-single-firmware-version-per-vehicle.md); other vehicles are
 left untouched, so you can hold several vehicles side by side, each at its
 own one stored firmware version.
 
-Three ways to provide the source page:
+Four ways to provide the source page:
 
     # every enabled vehicle on the Vehicle Roster, one invocation
     uv run python -m ardupilot_mcp.ingest --all --build-vectors
+
+    # only the named vehicles from the Roster (any name in it, enabled or
+    # not) — same behaviour as --all, just scoped
+    uv run python -m ardupilot_mcp.ingest --roster plane --build-vectors
 
     # a single vehicle, fetched directly — vehicle and firmware version
     # auto-detected from the URL/page
@@ -43,7 +47,7 @@ from .db import (
     upsert_parameter,
 )
 from .fetch import detect_vehicle_from_url, fetch_url
-from .roster import enabled_vehicles, load_roster
+from .roster import VehicleEntry, enabled_vehicles, load_roster
 from .scraper import detect_version, parse_html_file
 
 DEFAULT_ARCHIVE_DIR = (
@@ -218,7 +222,40 @@ def ingest(
     return IngestResult(len(params), vehicle, firmware_version)
 
 
+def _resolve_target_vehicles(
+    roster: dict[str, VehicleEntry],
+    vehicles: Optional[list[str]],
+) -> list[str]:
+    """Turn the caller's vehicle selection into the list to actually ingest.
+
+    `None` means the unscoped run: every Vehicle with `enabled: true`. A
+    list means exactly those Vehicles, whether or not they are enabled — an
+    explicit name is a stronger signal than the Roster's `--all` default.
+
+    Every name is validated against the Roster before anything is returned,
+    so a typo aborts the whole run rather than costing the correctly-spelled
+    vehicles their fetches. Duplicates are collapsed, first occurrence
+    winning, so the caller sees progress in the order they asked for.
+    """
+    if vehicles is None:
+        return enabled_vehicles(roster)
+
+    unknown = [name for name in vehicles if name not in roster]
+    if unknown:
+        raise ValueError(
+            f"unknown vehicle {', '.join(repr(n) for n in unknown)}; "
+            f"the Vehicle Roster has: {', '.join(sorted(roster))}"
+        )
+
+    deduped: list[str] = []
+    for name in vehicles:
+        if name not in deduped:
+            deduped.append(name)
+    return deduped
+
+
 def ingest_all(
+    vehicles: Optional[list[str]] = None,
     vehicles_config: Optional[Path] = None,
     db_path: Path = DEFAULT_DB_PATH,
     build_vectors: bool = False,
@@ -227,7 +264,12 @@ def ingest_all(
     http_client: Optional[httpx.Client] = None,
     verbose: bool = False,
 ) -> list[VehicleIngestOutcome]:
-    """Ingest every enabled Vehicle on the Roster in one call.
+    """Ingest several Vehicles from the Roster in one call.
+
+    `vehicles=None` ingests every enabled Vehicle on the Roster (the `--all`
+    run). Passing a list of names ingests exactly those instead (`--roster`),
+    ignoring their `enabled` flag; unknown names raise ValueError before any
+    fetch happens. See `_resolve_target_vehicles`.
 
     One vehicle failing (network error, undetectable version, ...) does not
     abort the run — ingest is already atomic per vehicle, so a partial run
@@ -241,7 +283,7 @@ def ingest_all(
     roster = load_roster(vehicles_config)
     outcomes: list[VehicleIngestOutcome] = []
 
-    for name in enabled_vehicles(roster):
+    for name in _resolve_target_vehicles(roster, vehicles):
         entry = roster[name]
         try:
             result = ingest(
@@ -287,6 +329,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                                     "e.g. https://ardupilot.org/copter/docs/parameters.html")
     source_group.add_argument("--all", action="store_true",
                                help="Ingest every enabled vehicle on the Vehicle Roster")
+    source_group.add_argument("--roster", nargs="+", metavar="VEHICLE", default=None,
+                               help="Ingest only the named vehicles from the Vehicle Roster, "
+                                    "e.g. --roster plane copter. Works for vehicles marked "
+                                    "enabled: false, which only --all skips")
     parser.add_argument("--vehicle", default=None,
                          help="Required with --html; auto-detected from --url if omitted "
                               "(against the Vehicle Roster's known names)")
@@ -308,14 +354,41 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args(argv)
 
-    if args.all:
-        outcomes = ingest_all(
-            vehicles_config=args.vehicles_config,
-            db_path=args.db,
-            build_vectors=args.build_vectors,
-            vectors_path=args.vectors_path,
-            verbose=not args.quiet,
-        )
+    if args.all or args.roster:
+        # Every vehicle's URL comes from the Roster and its firmware version
+        # from the fetched page, so these three can't mean anything here.
+        # Dropping them silently would make e.g.
+        # `--roster plane --firmware-version 4.7.0` look like it pinned a
+        # version when it didn't.
+        conflicting = [
+            flag for flag, value in (
+                ("--vehicle", args.vehicle),
+                ("--firmware-version", args.firmware_version),
+                ("--source-url", args.source_url),
+            ) if value is not None
+        ]
+        if conflicting:
+            parser.error(
+                f"{', '.join(conflicting)} cannot be combined with --all/--roster "
+                "(vehicle comes from the Vehicle Roster, firmware version from the page)"
+            )
+
+        try:
+            outcomes = ingest_all(
+                vehicles=args.roster,
+                vehicles_config=args.vehicles_config,
+                db_path=args.db,
+                build_vectors=args.build_vectors,
+                vectors_path=args.vectors_path,
+                verbose=not args.quiet,
+            )
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            # Unknown --roster name, or an unreadable --vehicles-config.
+            # Same reasoning as the single-vehicle handler below: a clean
+            # one-liner, not a traceback.
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
         failed = [o for o in outcomes if not o.success]
         for o in outcomes:
             if o.success:

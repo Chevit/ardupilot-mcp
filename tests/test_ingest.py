@@ -206,6 +206,101 @@ def test_ingest_all_rebuilds_vectors_once_for_all_successes(tmp_path, roster_fil
     assert set(model_loads) == {"plane", "copter"}
 
 
+# -- --roster (a name-filtered --all) -- #
+
+def _recording_client() -> tuple[httpx.Client, list[str]]:
+    fetched_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched_urls.append(str(request.url))
+        return httpx.Response(200, text=_FIXTURE_HTML)
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), fetched_urls
+
+
+def test_ingest_all_filters_to_the_named_vehicles(tmp_path, roster_file):
+    db_path = tmp_path / "test.db"
+    client, fetched_urls = _recording_client()
+
+    outcomes = ingest_all(
+        vehicles=["plane"],
+        vehicles_config=roster_file, db_path=db_path,
+        archive_dir=tmp_path / "ardupilot-docs", http_client=client, verbose=False,
+    )
+
+    assert [o.vehicle for o in outcomes] == ["plane"]
+    assert len(fetched_urls) == 1
+    assert "plane" in fetched_urls[0]
+
+
+def test_ingest_all_named_vehicle_ignores_enabled_false(tmp_path, roster_file):
+    # `enabled: false` only filters the unscoped run. Naming a vehicle
+    # explicitly is a stronger signal than the roster's --all default.
+    db_path = tmp_path / "test.db"
+    client, fetched_urls = _recording_client()
+
+    outcomes = ingest_all(
+        vehicles=["blimp"],
+        vehicles_config=roster_file, db_path=db_path,
+        archive_dir=tmp_path / "ardupilot-docs", http_client=client, verbose=False,
+    )
+
+    assert [o.vehicle for o in outcomes] == ["blimp"]
+    assert len(fetched_urls) == 1
+
+
+def test_ingest_all_rejects_unknown_vehicle_before_fetching(tmp_path, roster_file):
+    db_path = tmp_path / "test.db"
+    client, fetched_urls = _recording_client()
+
+    with pytest.raises(ValueError, match="unknown vehicle"):
+        ingest_all(
+            vehicles=["plane", "plnae"],
+            vehicles_config=roster_file, db_path=db_path,
+            archive_dir=tmp_path / "ardupilot-docs", http_client=client, verbose=False,
+        )
+
+    # A typo must not burn the fetches of the vehicles that *were* spelled
+    # right -- validation happens up front, for the whole list.
+    assert fetched_urls == []
+
+
+def test_ingest_all_unknown_vehicle_error_lists_the_roster(tmp_path, roster_file):
+    with pytest.raises(ValueError) as excinfo:
+        ingest_all(vehicles=["plnae"], vehicles_config=roster_file, db_path=tmp_path / "t.db")
+
+    message = str(excinfo.value)
+    assert "blimp" in message and "copter" in message and "plane" in message
+
+
+def test_ingest_all_dedupes_names_preserving_order(tmp_path, roster_file):
+    db_path = tmp_path / "test.db"
+    client, fetched_urls = _recording_client()
+
+    outcomes = ingest_all(
+        vehicles=["copter", "plane", "copter"],
+        vehicles_config=roster_file, db_path=db_path,
+        archive_dir=tmp_path / "ardupilot-docs", http_client=client, verbose=False,
+    )
+
+    assert [o.vehicle for o in outcomes] == ["copter", "plane"]
+    assert len(fetched_urls) == 2
+
+
+def test_ingest_all_without_vehicles_still_means_every_enabled_one(tmp_path, roster_file):
+    db_path = tmp_path / "test.db"
+    client, fetched_urls = _recording_client()
+
+    outcomes = ingest_all(
+        vehicles=None,
+        vehicles_config=roster_file, db_path=db_path,
+        archive_dir=tmp_path / "ardupilot-docs", http_client=client, verbose=False,
+    )
+
+    assert {o.vehicle for o in outcomes} == {"plane", "copter"}
+    assert len(fetched_urls) == 2
+
+
 # -- main() CLI -- #
 
 def test_main_rejects_both_html_and_url_flags(capsys):
@@ -220,7 +315,41 @@ def test_main_rejects_both_html_and_url_flags(capsys):
 def test_main_rejects_neither_html_nor_url_nor_all_flag(capsys):
     with pytest.raises(SystemExit):
         main([])
-    assert "one of the arguments --html --url --all is required" in capsys.readouterr().err
+    assert "one of the arguments --html --url --all --roster is required" in capsys.readouterr().err
+
+
+def test_main_rejects_roster_together_with_all(capsys):
+    with pytest.raises(SystemExit):
+        main(["--all", "--roster", "plane"])
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("source_flag", [["--all"], ["--roster", "plane"]])
+@pytest.mark.parametrize("modifier", [
+    ["--vehicle", "copter"],
+    ["--firmware-version", "1.0"],
+    ["--source-url", "https://example.test/parameters.html"],
+])
+def test_main_rejects_modifier_flags_with_roster_sources(source_flag, modifier, capsys):
+    # Each vehicle's URL comes from the Roster and its version from the
+    # fetched page, so these flags cannot mean anything here. Silently
+    # dropping them would make e.g. `--roster plane --firmware-version 4.7.0`
+    # look like it pinned a version.
+    with pytest.raises(SystemExit):
+        main(source_flag + modifier)
+    assert "cannot be combined with --all/--roster" in capsys.readouterr().err
+
+
+def test_main_reports_unknown_roster_vehicle_cleanly(tmp_path, roster_file, capsys):
+    exit_code = main([
+        "--roster", "plnae",
+        "--vehicles-config", str(roster_file),
+        "--db", str(tmp_path / "test.db"),
+    ])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "unknown vehicle" in err
 
 
 def test_main_prints_clean_error_instead_of_traceback(tmp_path, capsys):
