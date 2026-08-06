@@ -21,3 +21,30 @@ from ardupilot_mcp.fetch import detect_vehicle_from_url, fetch_url
 ])
 def test_detect_vehicle_from_url(url, expected):
     assert detect_vehicle_from_url(url) == expected
+
+
+def test_fetch_url_returns_body_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://example.test/parameters.html"
+        return httpx.Response(200, text="<html>ok</html>")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert fetch_url("https://example.test/parameters.html", client=client) == "<html>ok</html>"
+
+
+def test_fetch_url_raises_runtime_error_on_http_status_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="failed to fetch"):
+        fetch_url("https://example.test/missing.html", client=client)
+
+
+def test_fetch_url_raises_runtime_error_on_transport_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="failed to fetch"):
+        fetch_url("https://example.test/unreachable.html", client=client)
