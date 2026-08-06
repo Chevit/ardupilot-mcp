@@ -63,42 +63,144 @@ def _identity_encoder(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
+def _rows(*specs) -> list[dict]:
+    """specs: (param_id, name, vehicle, firmware_version, text) tuples."""
+    return [
+        {"param_id": pid, "name": name, "vehicle": vehicle,
+         "firmware_version": fw, "text": text}
+        for pid, name, vehicle, fw, text in specs
+    ]
+
+
 def test_rebuild_and_search_roundtrip(tmp_path):
     store = _store(tmp_path)
-    rows = [
-        {"param_id": 1, "name": "RC_OPTIONS", "vehicle": "plane",
-         "firmware_version": "4.8.0", "text": "RC input options"},
-        {"param_id": 2, "name": "LOG_BITMASK", "vehicle": "plane",
-         "firmware_version": "4.8.0", "text": "Log bitmask control"},
-        {"param_id": 3, "name": "RC_OPTIONS", "vehicle": "plane",
-         "firmware_version": "4.6.3", "text": "RC input options"},
-    ]
-
-    n = store.rebuild(rows, encoder=_identity_encoder)
-    assert n == 3
-
-    hits = store.search(
-        "RC input options", k=5, firmware_version="4.8.0", encoder=_identity_encoder
+    rows = _rows(
+        (1, "RC_OPTIONS", "plane", "4.8.0", "RC input options"),
+        (2, "LOG_BITMASK", "plane", "4.8.0", "Log bitmask control"),
     )
-    # Nearest match is the identical-text row; the 4.6.3 row is filtered out
-    # entirely even though its text is also identical (wrong version).
-    assert hits[0]["param_id"] == 1
-    assert 3 not in [h["param_id"] for h in hits]
 
-
-def test_search_firmware_version_with_special_characters(tmp_path):
-    store = _store(tmp_path)
-    tricky_version = "4.8.0'; DROP TABLE parameters; --"
-    rows = [
-        {"param_id": 1, "name": "RC_OPTIONS", "vehicle": "plane",
-         "firmware_version": tricky_version, "text": "RC input options"},
-        {"param_id": 2, "name": "RC_OPTIONS", "vehicle": "plane",
-         "firmware_version": "4.6.3", "text": "RC input options"},
-    ]
-    store.rebuild(rows, encoder=_identity_encoder)
+    n = store.rebuild(rows, vehicle="plane", encoder=_identity_encoder)
+    assert n == 2
 
     hits = store.search(
-        "RC input options", k=5, firmware_version=tricky_version, encoder=_identity_encoder
+        "RC input options", k=5, vehicles=["plane"], encoder=_identity_encoder
+    )
+    assert hits[0]["param_id"] == 1
+
+
+def test_rebuild_replaces_only_the_given_vehicle(tmp_path):
+    # ADR-0001: the index holds one version per vehicle. Rebuilding plane
+    # must not touch copter's rows.
+    store = _store(tmp_path)
+    store.rebuild(
+        _rows((1, "RC_OPTIONS", "plane", "4.6.3", "old plane text")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "copter text")),
+        vehicle="copter", encoder=_identity_encoder,
+    )
+
+    # Re-ingest plane at a new version — old plane row gone, copter intact.
+    store.rebuild(
+        _rows((3, "RC_OPTIONS", "plane", "4.8.0", "new plane text")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+
+    hits = store.search(
+        "new plane text", k=10, vehicles=None, encoder=_identity_encoder
+    )
+    ids = {h["param_id"] for h in hits}
+    assert ids == {2, 3}  # id 1 (old plane) is gone; copter (2) untouched
+
+
+def test_rebuild_with_empty_rows_clears_that_vehicle(tmp_path):
+    store = _store(tmp_path)
+    store.rebuild(
+        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "text")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "text")),
+        vehicle="copter", encoder=_identity_encoder,
+    )
+
+    n = store.rebuild([], vehicle="plane", encoder=_identity_encoder)
+
+    assert n == 0
+    hits = store.search("text", k=10, vehicles=None, encoder=_identity_encoder)
+    assert [h["param_id"] for h in hits] == [2]
+
+
+def test_search_vehicles_filters_to_given_vehicles(tmp_path):
+    store = _store(tmp_path)
+    store.rebuild(
+        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "RC input options")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        vehicle="copter", encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((3, "RC_OPTIONS", "rover", "4.8.0", "RC input options")),
+        vehicle="rover", encoder=_identity_encoder,
+    )
+
+    hits = store.search(
+        "RC input options", k=10, vehicles=["plane", "rover"], encoder=_identity_encoder
+    )
+
+    assert {h["param_id"] for h in hits} == {1, 3}
+
+
+def test_search_vehicles_none_searches_everything_in_the_table(tmp_path):
+    store = _store(tmp_path)
+    store.rebuild(
+        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "RC input options")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        vehicle="copter", encoder=_identity_encoder,
+    )
+
+    hits = store.search(
+        "RC input options", k=10, vehicles=None, encoder=_identity_encoder
+    )
+
+    assert {h["param_id"] for h in hits} == {1, 2}
+
+
+def test_search_vehicle_with_special_characters(tmp_path):
+    store = _store(tmp_path)
+    tricky_vehicle = "plane'; DROP TABLE parameters; --"
+    store.rebuild(
+        _rows((1, "RC_OPTIONS", tricky_vehicle, "4.8.0", "RC input options")),
+        vehicle=tricky_vehicle, encoder=_identity_encoder,
+    )
+    store.rebuild(
+        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        vehicle="copter", encoder=_identity_encoder,
+    )
+
+    hits = store.search(
+        "RC input options", k=5, vehicles=[tricky_vehicle], encoder=_identity_encoder
     )
 
     assert [h["param_id"] for h in hits] == [1]
+
+    # And rebuilding that same tricky vehicle only replaces its own rows.
+    store.rebuild(
+        _rows((3, "RC_OPTIONS", tricky_vehicle, "4.8.0", "updated text")),
+        vehicle=tricky_vehicle, encoder=_identity_encoder,
+    )
+    hits = store.search(
+        "updated text", k=10, vehicles=None, encoder=_identity_encoder
+    )
+    assert {h["param_id"] for h in hits} == {2, 3}
+
+
+def test_search_returns_empty_when_no_table(tmp_path):
+    store = _store(tmp_path)
+    assert store.search("anything", encoder=_identity_encoder) == []

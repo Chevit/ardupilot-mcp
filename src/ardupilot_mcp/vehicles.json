@@ -1,0 +1,8 @@
+{
+  "plane": {"url": "https://ardupilot.org/plane/docs/parameters.html", "enabled": true},
+  "copter": {"url": "https://ardupilot.org/copter/docs/parameters.html", "enabled": true},
+  "rover": {"url": "https://ardupilot.org/rover/docs/parameters.html", "enabled": true},
+  "sub": {"url": "https://ardupilot.org/sub/docs/parameters.html", "enabled": true},
+  "blimp": {"url": "https://ardupilot.org/blimp/docs/parameters.html", "enabled": false},
+  "antennatracker": {"url": "https://ardupilot.org/antennatracker/docs/parameters.html", "enabled": false}
+}

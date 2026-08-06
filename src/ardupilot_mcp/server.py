@@ -9,6 +9,13 @@ claude_desktop_config.json — see the project README.
 All queries are 100% local. The vector store loads its embedding model
 lazily on the first semantic query; before that the process is very cheap
 and startup is instant, which keeps Claude Desktop responsive.
+
+`vehicle` has no default on any tool — the Vehicle Roster (see roster.py)
+decides which vehicles exist, and a wrong silent default (e.g. always
+"plane") is worse than a client having to call list_vehicles() first. The
+two search tools (search_parameters, semantic_search) accept vehicle=None
+to mean "every enabled vehicle"; lookup_parameter, list_parameters, and
+diff_parameter always hard-scope to the vehicle(s) given.
 """
 
 from __future__ import annotations
@@ -40,21 +47,20 @@ def _get_catalog() -> ParameterCatalog:
 # --------------------------------------------------------------------------- #
 
 @mcp.tool()
-def list_versions(vehicle: str = "plane") -> list[str]:
-    """List firmware versions available in the local database.
+def list_vehicles() -> list[dict[str, Any]]:
+    """List every Vehicle on the Vehicle Roster.
 
-    Call this first if you're unsure which versions are indexed. Currently
-    only 'plane' is supported. Returns a list like ['4.6.3', '4.8.0'].
+    Call this first if you're unsure which vehicle to pass — every other
+    tool requires one, with no default. Each entry reports the vehicle
+    name, whether it's enabled (fetched by --all ingest runs), and
+    ingested_version — the firmware version currently stored, or null if
+    this vehicle has never been ingested.
     """
-    return _get_catalog().list_versions(vehicle)
+    return _get_catalog().list_vehicles()
 
 
 @mcp.tool()
-def lookup_parameter(
-    name: str,
-    firmware_version: Optional[str] = None,
-    vehicle: str = "plane",
-) -> dict[str, Any] | None:
+def lookup_parameter(name: str, vehicle: str) -> dict[str, Any] | None:
     """Look up an ArduPilot parameter by exact name.
 
     Use this when the user references a specific parameter by name
@@ -66,42 +72,41 @@ def lookup_parameter(
 
     Args:
         name: Exact parameter name, case-sensitive (e.g. "RC_OPTIONS").
-        firmware_version: e.g. "4.8.0" or "4.6.3". Omit to use the latest.
-        vehicle: "plane" (only supported vehicle for now).
+        vehicle: e.g. "plane", "copter". Call list_vehicles() if unsure.
     """
-    return _get_catalog().lookup_parameter(name, firmware_version, vehicle)
+    return _get_catalog().lookup_parameter(name, vehicle)
 
 
 @mcp.tool()
 def search_parameters(
     query: str,
-    firmware_version: Optional[str] = None,
+    vehicle: Optional[str] = None,
     limit: int = 10,
-    vehicle: str = "plane",
 ) -> list[dict[str, Any]]:
     """Keyword search over parameter names, descriptions, sections, and enum labels.
 
-    Backed by SQLite FTS5. Best for exact-word queries or when you need to
-    search a specific firmware version. Value labels are indexed too, so
-    'Fast Attitude' will find LOG_BITMASK (which has that bit meaning).
+    Backed by SQLite FTS5. Best for exact-word queries. Value labels are
+    indexed too, so 'Fast Attitude' will find LOG_BITMASK (which has that
+    bit meaning).
 
     Query syntax follows FTS5: bare words are AND-ed; use double quotes for
     phrases ('"attitude locking"'); use * for prefix ('RTL*').
 
     Args:
         query: Search terms.
-        firmware_version: Filter to a version. Omit to search all versions.
+        vehicle: Restrict to one vehicle (e.g. "plane"). Omit to search
+            every enabled vehicle on the Vehicle Roster — results are
+            tagged with which vehicle they came from.
         limit: Maximum results (default 10).
-        vehicle: "plane".
     """
-    return _get_catalog().search_parameters(query, firmware_version, limit, vehicle)
+    return _get_catalog().search_parameters(query, vehicle, limit)
 
 
 @mcp.tool()
 def semantic_search(
     query: str,
+    vehicle: Optional[str] = None,
     k: int = 5,
-    vehicle: str = "plane",
 ) -> list[dict[str, Any]]:
     """Semantic (vector) search over parameter descriptions.
 
@@ -111,67 +116,71 @@ def semantic_search(
     smoother?", "параметри для стабілізації висоти".
 
     Multilingual — Ukrainian and English work equally well.
-    Only searches the latest indexed firmware version (semantic index does
-    not cover older versions; use search_parameters for those).
 
     Args:
         query: Natural-language question or description.
+        vehicle: Restrict to one vehicle. Omit to search every enabled
+            vehicle — when a parameter matches in several, the results are
+            deduped and the entry reports every vehicle that matched via a
+            `vehicles` field, so "which vehicles have X?" is answerable
+            directly.
         k: Number of results to return (default 5).
-        vehicle: "plane".
     """
-    return _get_catalog().semantic_search(query, k, vehicle)
+    return _get_catalog().semantic_search(query, vehicle, k)
 
 
 @mcp.tool()
 def list_parameters(
+    vehicle: str,
     prefix: Optional[str] = None,
     section: Optional[str] = None,
-    firmware_version: Optional[str] = None,
-    vehicle: str = "plane",
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Browse parameters by name prefix or section.
+    """Browse a vehicle's parameters by name prefix or section.
 
     Use this when the user asks to see a family of parameters, e.g.
     "list all RTL parameters", "what's in the AHRS group", "show me the
     ARSPD_ family".
 
     Args:
+        vehicle: e.g. "plane", "copter". Call list_vehicles() if unsure.
         prefix: Name prefix to match. "RTL" matches RTL_ALTITUDE, RTL_CLIMB_MIN, etc.
                 Do not include a trailing underscore.
-        section: Section name. Use list_sections() first if unsure. Case-insensitive.
-        firmware_version: Version filter. Defaults to the latest indexed.
-        vehicle: "plane".
+        section: Section name. Case-insensitive.
         limit: Maximum results (default 50).
     """
-    return _get_catalog().list_parameters(prefix, section, firmware_version, vehicle, limit)
+    return _get_catalog().list_parameters(vehicle, prefix, section, limit)
 
 
 @mcp.tool()
 def diff_parameter(
     name: str,
-    version_a: str,
-    version_b: str,
-    vehicle: str = "plane",
+    vehicle_a: str,
+    vehicle_b: str,
 ) -> dict[str, Any]:
-    """Compare a parameter across two ArduPilot firmware versions.
+    """Compare a parameter's definition across two ArduPilot vehicles.
 
     Reports field-by-field differences (description, range, units, values,
-    bitmask bits) between the two versions. Useful for understanding what
-    changed when upgrading firmware.
+    bitmask bits) between the two vehicles' definitions of the same
+    parameter name. Useful for "how does RTL_ALT differ between plane and
+    copter?"-style questions.
 
-    Returns a dict with keys 'name', 'version_a', 'version_b', 'exists_in_a',
-    'exists_in_b', and 'differences' (list of field-level diffs). If the
-    parameter is missing in either version, 'differences' is empty and the
+    Returns a dict with keys 'name', 'vehicle_a', 'vehicle_b',
+    'exists_in_a', 'exists_in_b', 'version_a', 'version_b',
+    'version_mismatch', and 'differences' (list of field-level diffs).
+    version_a/version_b are each vehicle's stored firmware_version —
+    provenance, not something you pass in — and version_mismatch is true
+    when the two vehicles happen to be pinned to different versions on the
+    Vehicle Roster, since that can itself explain part of the diff. If the
+    parameter is missing in either vehicle, 'differences' is empty and the
     exists_* flags convey that.
 
     Args:
         name: Parameter name (case-sensitive).
-        version_a: e.g. "4.6.3".
-        version_b: e.g. "4.8.0".
-        vehicle: "plane".
+        vehicle_a: e.g. "plane".
+        vehicle_b: e.g. "copter".
     """
-    return _get_catalog().diff_parameter(name, version_a, version_b, vehicle)
+    return _get_catalog().diff_parameter(name, vehicle_a, vehicle_b)
 
 
 # --------------------------------------------------------------------------- #
