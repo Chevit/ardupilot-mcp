@@ -17,6 +17,9 @@ dependencies = [
 ardupilot-mcp = "ardupilot_mcp.server:main"
 ardupilot-refresh = "ardupilot_mcp.ingest:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -28,3 +31,8 @@ torch = [{ index = "pytorch-cpu" }]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
