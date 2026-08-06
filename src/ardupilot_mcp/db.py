@@ -112,9 +112,13 @@ class Parameter:
     values: list[ParameterValue] = field(default_factory=list)
 
 
-@contextmanager
-def connect(db_path=DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
-    """Open a connection with FKs on and Row row factory. Commits on clean exit.
+def open_connection(db_path=DEFAULT_DB_PATH) -> sqlite3.Connection:
+    """Open a raw connection with FKs on and Row row factory.
+
+    The caller owns the connection's lifetime — commit and close it
+    themselves. Used directly by ParameterCatalog, which holds one
+    connection open for its process lifetime; connect() below wraps this
+    for the common open/commit/close-per-call case.
 
     Accepts either a str or a Path.
     """
@@ -123,6 +127,16 @@ def connect(db_path=DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+@contextmanager
+def connect(db_path=DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
+    """Open a connection via open_connection(). Commits on clean exit, always closes.
+
+    Accepts either a str or a Path.
+    """
+    conn = open_connection(db_path)
     try:
         yield conn
         conn.commit()
