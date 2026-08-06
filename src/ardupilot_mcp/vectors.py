@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable, Optional, TYPE_CHECKING
 
 import lancedb
 import pyarrow as pa
+from lancedb.expr import col, lit
 
 from .db import DEFAULT_DB_PATH, connect, list_versions
 
@@ -204,8 +205,7 @@ class VectorStore:
 
         q = table.search(qvec).limit(k)
         if firmware_version:
-            # LanceDB uses SQL-style where clauses. Single quotes for strings.
-            q = q.where(f"firmware_version = '{firmware_version}'")
+            q = q.where(col("firmware_version") == lit(firmware_version))
         return q.to_list()
 
 

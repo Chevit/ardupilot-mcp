@@ -52,3 +52,53 @@ def test_encode_queries_adds_query_prefix(tmp_path):
     store._encode_queries(["why is my plane climbing"])
 
     assert fake_model.calls == [["query: why is my plane climbing"]]
+
+
+def _identity_encoder(texts: list[str]) -> list[list[float]]:
+    """Deterministic fake encoder: identical text -> identical vector."""
+    vectors = []
+    for t in texts:
+        digest = hashlib.sha256(t.encode("utf-8")).digest()
+        vectors.append([digest[i % len(digest)] / 255.0 for i in range(EMBEDDING_DIM)])
+    return vectors
+
+
+def test_rebuild_and_search_roundtrip(tmp_path):
+    store = _store(tmp_path)
+    rows = [
+        {"param_id": 1, "name": "RC_OPTIONS", "vehicle": "plane",
+         "firmware_version": "4.8.0", "text": "RC input options"},
+        {"param_id": 2, "name": "LOG_BITMASK", "vehicle": "plane",
+         "firmware_version": "4.8.0", "text": "Log bitmask control"},
+        {"param_id": 3, "name": "RC_OPTIONS", "vehicle": "plane",
+         "firmware_version": "4.6.3", "text": "RC input options"},
+    ]
+
+    n = store.rebuild(rows, encoder=_identity_encoder)
+    assert n == 3
+
+    hits = store.search(
+        "RC input options", k=5, firmware_version="4.8.0", encoder=_identity_encoder
+    )
+    # Nearest match is the identical-text row; the 4.6.3 row is filtered out
+    # entirely even though its text is also identical (wrong version).
+    assert hits[0]["param_id"] == 1
+    assert 3 not in [h["param_id"] for h in hits]
+
+
+def test_search_firmware_version_with_special_characters(tmp_path):
+    store = _store(tmp_path)
+    tricky_version = "4.8.0'; DROP TABLE parameters; --"
+    rows = [
+        {"param_id": 1, "name": "RC_OPTIONS", "vehicle": "plane",
+         "firmware_version": tricky_version, "text": "RC input options"},
+        {"param_id": 2, "name": "RC_OPTIONS", "vehicle": "plane",
+         "firmware_version": "4.6.3", "text": "RC input options"},
+    ]
+    store.rebuild(rows, encoder=_identity_encoder)
+
+    hits = store.search(
+        "RC input options", k=5, firmware_version=tricky_version, encoder=_identity_encoder
+    )
+
+    assert [h["param_id"] for h in hits] == [1]
