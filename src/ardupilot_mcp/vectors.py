@@ -105,6 +105,9 @@ class VectorStore:
         self._model: Optional["SentenceTransformer"] = None
         self._db = lancedb.connect(str(self.path))
 
+    def _has_table(self) -> bool:
+        return TABLE_NAME in self._db.list_tables().tables
+
     # -- model management (lazy) -- #
     @property
     def model(self) -> "SentenceTransformer":
@@ -148,7 +151,7 @@ class VectorStore:
         If `encoder` is None, the real e5 model is used.
         """
         if not rows:
-            if TABLE_NAME in self._db.table_names():
+            if self._has_table():
                 self._db.drop_table(TABLE_NAME)
             return 0
 
@@ -176,7 +179,7 @@ class VectorStore:
             ("vector",           pa.list_(pa.float32(), EMBEDDING_DIM)),
         ])
 
-        if TABLE_NAME in self._db.table_names():
+        if self._has_table():
             self._db.drop_table(TABLE_NAME)
         self._db.create_table(TABLE_NAME, data=records, schema=schema)
         return len(records)
@@ -194,7 +197,7 @@ class VectorStore:
         Each result is a dict with `param_id`, `name`, `vehicle`,
         `firmware_version`, and `_distance` (LanceDB's cosine distance).
         """
-        if TABLE_NAME not in self._db.table_names():
+        if not self._has_table():
             return []
         table = self._db.open_table(TABLE_NAME)
 
