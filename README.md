@@ -39,16 +39,7 @@ Every command below gets typed into that terminal window, one at a time, followe
    (Replace `path/to/ardupilot-mcp` with the real folder location — you can usually drag the
    folder into the terminal window instead of typing the path.)
 
-2. Get the parameter reference page for the vehicle you care about. Open this link in your web
-   browser:
-
-   `https://ardupilot.org/plane/docs/parameters.html`
-
-3. Save that page: in your browser's menu choose "Save Page As…" (or `Cmd+S` / `Ctrl+S`), and save
-   it into the `data/ardupilot-docs/` folder inside the project folder from step 1. If that folder
-   doesn't exist yet, create it first.
-
-4. Build the app (only needed once, or after an update):
+2. Build the app (only needed once, or after an update):
 
    ```bash
    docker compose build
@@ -56,14 +47,21 @@ Every command below gets typed into that terminal window, one at a time, followe
 
    This takes a few minutes the first time. Wait for it to finish.
 
-5. Load the parameter data you saved in step 3 into the app's database:
+3. Load the parameter data for the vehicle you care about — the app fetches the page directly
+   from ardupilot.org, no manual download needed:
 
    ```bash
-   docker compose run --rm mcp-stdio ardupilot-refresh --html "data/ardupilot-docs/Complete Parameter List — Plane documentation 4.8.0.html" --vehicle plane --firmware-version 4.8.0 --source-url https://ardupilot.org/plane/docs/parameters.html --build-vectors
+   docker compose run --rm mcp-stdio ardupilot-refresh --url https://ardupilot.org/plane/docs/parameters.html --build-vectors
    ```
 
-   If your saved file has a different name (e.g. a different version number), adjust the part
-   after `--html` to match the exact file name in `data/ardupilot-docs/`.
+   Vehicle and firmware version are detected automatically from that page. For a different
+   vehicle, use `copter`, `rover`, or `sub` in place of `plane` in the URL.
+
+   > No internet access on this machine, or want to pin a specific saved-locally page? Open the
+   > link above in a browser, "Save Page As…" into the `data/ardupilot-docs/` folder inside the
+   > project folder (create it if it doesn't exist), then run the same command with
+   > `--html "data/ardupilot-docs/<the saved file name>.html" --vehicle plane --firmware-version 4.8.0 --source-url https://ardupilot.org/plane/docs/parameters.html`
+   > in place of `--url ...`.
 
 You're set up. The next section explains how to actually use it.
 
@@ -114,13 +112,15 @@ If you'd rather run this with Python directly instead of Docker, you need
 ```bash
 uv sync
 uv run python -m ardupilot_mcp.ingest \
-    --html "data/ardupilot-docs/Complete Parameter List — Plane documentation 4.8.0.html" \
-    --vehicle plane \
-    --firmware-version 4.8.0 \
-    --source-url https://ardupilot.org/plane/docs/parameters.html \
+    --url https://ardupilot.org/plane/docs/parameters.html \
     --build-vectors
 uv run python -m ardupilot_mcp.server
 ```
+
+Vehicle and firmware version are auto-detected from the URL and page text; pass `--vehicle`/
+`--firmware-version` to override, or swap `--url <url>` for `--html "<path>" --vehicle plane
+--firmware-version 4.8.0 --source-url https://ardupilot.org/plane/docs/parameters.html` to ingest
+from a page you already downloaded instead of fetching it.
 
 Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main`,
 `ardupilot-refresh` → `ingest:main`.
