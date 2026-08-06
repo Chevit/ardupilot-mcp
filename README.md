@@ -5,7 +5,7 @@ MCP-сервер, що надає запити й відповіді про па
 MCP-клієнтів. Працює на 100% локально поверх сховища SQLite + LanceDB, зібраного зі згенерованої
 Sphinx HTML-документації параметрів ArduPilot.
 
-*[English version below](#english) — англійська версія нижче.*
+*[English version below](#ardupilot-mcp-english) — англійська версія нижче.*
 
 ## Можливості
 
@@ -30,22 +30,48 @@ Sphinx HTML-документації параметрів ArduPilot.
 1. **Docker Desktop** — завантажте з [docker.com](https://www.docker.com/products/docker-desktop/)
    і встановіть як звичайну програму. Це єдиний спосіб запуску — Python чи інші інструменти
    розробника встановлювати не треба.
-2. **Термінал** — на Mac відкрийте програму «Terminal» (знайдіть через Spotlight, `Cmd+Space`).
+2. **Git** — потрібен, щоб завантажити проєкт. На Mac уже встановлений (або запропонує
+   встановитися при першому запуску `git`). На Windows завантажте з
+   [git-scm.com](https://git-scm.com/download/win) і встановіть з усіма параметрами за
+   замовчуванням.
+3. **Термінал** — на Mac відкрийте програму «Terminal» (знайдіть через Spotlight, `Cmd+Space`).
    На Windows відкрийте «Command Prompt» або «PowerShell» (пошук у меню «Пуск»).
 
 Усі команди нижче вводяться у це вікно термінала, по одній, з натисканням Enter.
 
 ## Покрокове налаштування
 
-1. Отримайте копію проєкту на свій комп'ютер. Якщо вам дали теку — просто запам'ятайте, де вона.
-   У терміналі перейдіть у цю теку:
+1. Завантажте проєкт із GitHub. У терміналі спершу перейдіть туди, де хочете тримати теку
+   проєкту, потім склонуйте репозиторій:
+
+   **macOS / Linux:**
 
    ```bash
-   cd path/to/ardupilot-mcp
+   cd ~/Documents
+   git clone https://github.com/Chevit/ardupilot-mcp.git
+   cd ardupilot-mcp
    ```
 
-   (Замініть `path/to/ardupilot-mcp` на реальний шлях — зазвичай можна просто перетягнути теку у
-   вікно термінала замість того, щоб набирати шлях вручну.)
+   **Windows (Command Prompt або PowerShell):**
+
+   ```powershell
+   cd %USERPROFILE%\Documents
+   git clone https://github.com/Chevit/ardupilot-mcp.git
+   cd ardupilot-mcp
+   ```
+
+   Тепер запам'ятайте **повний шлях** до цієї теки — він знадобиться для налаштування Claude
+   Desktop. Дізнатися його:
+
+   - **macOS / Linux:** виконайте `pwd` → щось на кшталт `/Users/ваше-ім'я/Documents/ardupilot-mcp`
+   - **Windows:** виконайте `cd` (без аргументів) → щось на кшталт
+     `C:\Users\ваше-ім'я\Documents\ardupilot-mcp`
+
+   > Уже маєте теку проєкту (вам її передали, без git)? Тоді просто перейдіть у неї:
+   > `cd path/to/ardupilot-mcp`. Зазвичай можна перетягнути теку у вікно термінала замість того,
+   > щоб набирати шлях вручну.
+   >
+   > Пізніше, щоб оновитися до нової версії: `git pull` у цій самій теці, потім повторіть крок 2.
 
 2. Зберіть застосунок (потрібно один раз, або після оновлення):
 
@@ -77,34 +103,138 @@ Sphinx HTML-документації параметрів ArduPilot.
 
 Готово. Наступний розділ пояснює, як цим користуватися.
 
-## Використання з Claude Desktop / Claude Code
+## Використання з Claude Desktop
 
 Цей застосунок — «інструмент», який викликає Claude. Ви не запускаєте його самі: ви кажете Claude,
 де його знайти, а далі спілкуєтеся з Claude як зазвичай.
 
-1. Відкрийте файл налаштувань Claude Desktop / Claude Code (якщо не впевнені, де він — пошукайте
-   «MCP servers» у налаштуваннях вашого застосунку Claude).
-2. Додайте цей запис, замінивши `/path/to/ardupilot-mcp` на реальний шлях до теки з кроку 1:
+### Крок 1 — знайдіть файл `claude_desktop_config.json`
 
-   ```json
-   {
-     "mcpServers": {
-       "ardupilot": {
-         "command": "docker",
-         "args": ["compose", "-f", "/path/to/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
-       }
-     }
-   }
-   ```
+Найпростіше: у Claude Desktop відкрийте **Settings → Developer → Edit Config** — файл відкриється
+у редакторі. Якщо його немає, Claude Desktop створить порожній.
 
-   > Деякі MCP-клієнти не враховують поле `cwd`, через що `docker compose` падає з помилкою
-   > `no configuration file provided: not found`, бо не може знайти `docker-compose.yml`.
-   > Передача `-f /path/to/ardupilot-mcp/docker-compose.yml` це обходить — працює незалежно від
-   > робочої теки клієнта.
+Або відкрийте його вручну:
 
-3. Перезапустіть Claude Desktop / Claude Code.
-4. Запитайте у Claude щось на кшталт «що робить параметр RC_OPTIONS?» — Claude скористається цим
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+  (тобто `C:\Users\ваше-ім'я\AppData\Roaming\Claude\claude_desktop_config.json`)
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+### Крок 2 — дізнайтеся свій шлях до `docker-compose.yml`
+
+Це шлях до теки з кроку 1 налаштування, плюс `/docker-compose.yml` у кінці:
+
+- **macOS / Linux:** `/Users/ваше-ім'я/Documents/ardupilot-mcp/docker-compose.yml`
+- **Windows:** `C:\Users\ваше-ім'я\Documents\ardupilot-mcp\docker-compose.yml` — але у JSON кожен
+  зворотний слеш треба **подвоїти**, тобто записати як
+  `C:\\Users\\ваше-ім'я\\Documents\\ardupilot-mcp\\docker-compose.yml`.
+  (Або використайте звичайні слеші: `C:/Users/ваше-ім'я/Documents/ardupilot-mcp/docker-compose.yml`
+  — Docker це теж розуміє, і подвоювати нічого не треба.)
+
+### Крок 3 — додайте запис у файл
+
+**Випадок A — файл порожній або в ньому `{}`** (жодних MCP-серверів ще немає). Замініть увесь
+вміст файлу на це:
+
+```json
+{
+  "mcpServers": {
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "/Users/ваше-ім'я/Documents/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+Windows-версія того самого:
+
+```json
+{
+  "mcpServers": {
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "C:\\Users\\ваше-ім'я\\Documents\\ardupilot-mcp\\docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+**Випадок B — у файлі вже є блок `"mcpServers"` з іншими серверами.** Не замінюйте файл цілком —
+додайте `"ardupilot"` як ще один запис **усередині** наявного `"mcpServers"`, і не забудьте кому
+після попереднього запису:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/ваше-ім'я/Documents"]
+    },
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "/Users/ваше-ім'я/Documents/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+(`"filesystem"` тут — просто приклад того, що у вас уже могло бути. Залиште свої записи як є,
+допишіть лише `"ardupilot"`.)
+
+> Три найчастіші помилки у цьому файлі:
+>
+> 1. **Забута кома** між записами серверів — Claude Desktop мовчки проігнорує весь файл.
+> 2. **Зайва кома** після останнього запису — JSON цього не дозволяє.
+> 3. **Одинарний зворотний слеш** у шляху Windows — треба `\\`, а не `\`.
+>
+> Деякі MCP-клієнти не враховують поле `cwd`, через що `docker compose` падає з помилкою
+> `no configuration file provided: not found`, бо не може знайти `docker-compose.yml`.
+> Передача `-f <повний шлях до docker-compose.yml>` це обходить — працює незалежно від робочої
+> теки клієнта. Тому шлях тут має бути **повним (абсолютним)**, а не відносним.
+
+### Крок 4 — перезапустіть і перевірте
+
+1. Повністю закрийте Claude Desktop (на macOS — `Cmd+Q`, не просто закрити вікно) і відкрийте
+   знову.
+2. Переконайтеся, що **Docker Desktop запущений** — без нього сервер не стартує.
+3. Запитайте у Claude щось на кшталт «що робить параметр RC_OPTIONS?» — Claude скористається цим
    інструментом автоматично.
+
+## Щоденне використання: запуск без перезбирання
+
+`docker compose build` потрібен **лише один раз** — і потім тільки після `git pull` або зміни
+`Dockerfile`/залежностей. Дані параметрів лежать у теці `data/` і переживають зупинку та
+видалення контейнерів, тож `ardupilot-refresh` теж не треба повторювати (хіба що хочете свіжішу
+версію прошивки).
+
+**Якщо ви користуєтесь Claude Desktop (stdio):** запускати нічого не треба. Claude Desktop сам
+стартує контейнер щоразу, коли відкривається, і зупиняє його при виході — тому побачити
+`ardupilot-mcp` серед запущених контейнерів між сесіями ви й не повинні. Це нормально. Єдина
+умова — **Docker Desktop має бути запущений** до старту Claude Desktop. Після перезавантаження
+комп'ютера: відкрийте Docker Desktop, дочекайтеся, поки він покаже «Engine running», потім
+відкрийте Claude Desktop. Якщо Claude каже, що сервер не стартував — саме це майже завжди й
+причина.
+
+**Якщо ви користуєтесь спільним HTTP-сервером:** після зупинки чи перезавантаження підніміть його
+знову — образ уже зібраний, перезбирання не буде:
+
+```bash
+docker compose up -d mcp-http
+```
+
+Корисні команди у теці проєкту:
+
+```bash
+docker compose ps              # чи працює mcp-http зараз
+docker compose logs mcp-http   # логи, якщо щось пішло не так
+docker compose stop mcp-http   # зупинити (дані лишаються)
+docker compose start mcp-http  # підняти зупинений контейнер назад
+```
+
+Сервіс `mcp-http` має `restart: unless-stopped`, тож після перезавантаження комп'ютера він
+підніметься сам, щойно стартує Docker Desktop — крім випадку, коли ви зупинили його вручну через
+`docker compose stop`.
 
 ## Додатково: запуск як спільного сервера
 
@@ -218,11 +348,7 @@ Apache License 2.0 — див. [LICENSE](LICENSE).
 
 ---
 
-<a name="english"></a>
-
-# English
-
-# ardupilot-mcp
+# ardupilot-mcp (English)
 
 MCP server exposing ArduPilot firmware parameter Q&A — keyword search, semantic search, and
 cross-vehicle diffing — to Claude Desktop, Claude Code, and other MCP clients. Runs 100% locally
@@ -249,22 +375,47 @@ Before you start, you need two things installed on your computer:
 1. **Docker Desktop** — download from [docker.com](https://www.docker.com/products/docker-desktop/)
    and install it like any other app. This is the only way you'll run things — no need to install
    Python or any other developer tools.
-2. **A terminal app** — on Mac, open the app called "Terminal" (search for it with Spotlight,
+2. **Git** — needed to download the project. Already installed on Mac (or it offers to install
+   itself the first time you run `git`). On Windows, download from
+   [git-scm.com](https://git-scm.com/download/win) and install with all the default options.
+3. **A terminal app** — on Mac, open the app called "Terminal" (search for it with Spotlight,
    `Cmd+Space`). On Windows, open "Command Prompt" or "PowerShell" (search in the Start menu).
 
 Every command below gets typed into that terminal window, one at a time, followed by Enter.
 
 ## Step-by-step setup
 
-1. Get a copy of this project onto your computer. If you were given a folder, just make sure you
-   know where it is. In the terminal, move into that folder:
+1. Download the project from GitHub. In the terminal, first move to wherever you want the project
+   folder to live, then clone the repository:
+
+   **macOS / Linux:**
 
    ```bash
-   cd path/to/ardupilot-mcp
+   cd ~/Documents
+   git clone https://github.com/Chevit/ardupilot-mcp.git
+   cd ardupilot-mcp
    ```
 
-   (Replace `path/to/ardupilot-mcp` with the real folder location — you can usually drag the
-   folder into the terminal window instead of typing the path.)
+   **Windows (Command Prompt or PowerShell):**
+
+   ```powershell
+   cd %USERPROFILE%\Documents
+   git clone https://github.com/Chevit/ardupilot-mcp.git
+   cd ardupilot-mcp
+   ```
+
+   Now note the **full path** to this folder — you'll need it to configure Claude Desktop. To find
+   it:
+
+   - **macOS / Linux:** run `pwd` → something like `/Users/your-name/Documents/ardupilot-mcp`
+   - **Windows:** run `cd` (with no arguments) → something like
+     `C:\Users\your-name\Documents\ardupilot-mcp`
+
+   > Already have the project folder (someone handed it to you, no git)? Then just move into it:
+   > `cd path/to/ardupilot-mcp`. You can usually drag the folder into the terminal window instead
+   > of typing the path.
+   >
+   > Later, to update to a newer version: `git pull` in that same folder, then redo step 2.
 
 2. Build the app (only needed once, or after an update):
 
@@ -296,34 +447,136 @@ Every command below gets typed into that terminal window, one at a time, followe
 
 You're set up. The next section explains how to actually use it.
 
-## Using it with Claude Desktop / Claude Code
+## Using it with Claude Desktop
 
 This app is a "tool" that Claude can call — you don't run it by itself, you tell Claude how to
 find it, then talk to Claude as usual.
 
-1. Open your Claude Desktop / Claude Code settings file (search your Claude app's settings for
-   "MCP servers" if unsure where this lives).
-2. Add this entry, replacing `/path/to/ardupilot-mcp` with the real folder path from setup step 1:
+### Step 1 — find `claude_desktop_config.json`
 
-   ```json
-   {
-     "mcpServers": {
-       "ardupilot": {
-         "command": "docker",
-         "args": ["compose", "-f", "/path/to/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
-       }
-     }
-   }
-   ```
+Easiest way: in Claude Desktop, open **Settings → Developer → Edit Config** — the file opens in an
+editor. If it doesn't exist yet, Claude Desktop creates an empty one.
 
-   > Some MCP clients don't honor a `cwd` field, which makes `docker compose` fail with
-   > `no configuration file provided: not found` since it can't locate `docker-compose.yml`.
-   > Passing `-f /path/to/ardupilot-mcp/docker-compose.yml` sidesteps that — it works
-   > regardless of the client's working directory.
+Or open it by hand:
 
-3. Restart Claude Desktop / Claude Code.
-4. Ask Claude something like "what does the RC_OPTIONS parameter do?" — Claude will use this tool
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+  (i.e. `C:\Users\your-name\AppData\Roaming\Claude\claude_desktop_config.json`)
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+### Step 2 — work out your path to `docker-compose.yml`
+
+It's the folder path from setup step 1, with `/docker-compose.yml` on the end:
+
+- **macOS / Linux:** `/Users/your-name/Documents/ardupilot-mcp/docker-compose.yml`
+- **Windows:** `C:\Users\your-name\Documents\ardupilot-mcp\docker-compose.yml` — but inside JSON
+  every backslash must be **doubled**, so write it as
+  `C:\\Users\\your-name\\Documents\\ardupilot-mcp\\docker-compose.yml`.
+  (Or use forward slashes: `C:/Users/your-name/Documents/ardupilot-mcp/docker-compose.yml` —
+  Docker understands those too, and nothing needs doubling.)
+
+### Step 3 — add the entry to the file
+
+**Case A — the file is empty or contains `{}`** (no MCP servers configured yet). Replace the whole
+file contents with this:
+
+```json
+{
+  "mcpServers": {
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "/Users/your-name/Documents/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+The Windows version of the same:
+
+```json
+{
+  "mcpServers": {
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "C:\\Users\\your-name\\Documents\\ardupilot-mcp\\docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+**Case B — the file already has an `"mcpServers"` block with other servers in it.** Don't replace
+the whole file — add `"ardupilot"` as one more entry **inside** the existing `"mcpServers"`, and
+don't forget the comma after the previous entry:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/your-name/Documents"]
+    },
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "-f", "/Users/your-name/Documents/ardupilot-mcp/docker-compose.yml", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+(`"filesystem"` is just an example of what you might already have. Leave your own entries alone
+and add only `"ardupilot"`.)
+
+> The three most common mistakes in this file:
+>
+> 1. **Missing comma** between server entries — Claude Desktop silently ignores the whole file.
+> 2. **Trailing comma** after the last entry — JSON doesn't allow it.
+> 3. **Single backslash** in a Windows path — it has to be `\\`, not `\`.
+>
+> Some MCP clients don't honor a `cwd` field, which makes `docker compose` fail with
+> `no configuration file provided: not found` since it can't locate `docker-compose.yml`.
+> Passing `-f <full path to docker-compose.yml>` sidesteps that — it works regardless of the
+> client's working directory. That's why the path here must be **full (absolute)**, not relative.
+
+### Step 4 — restart and check
+
+1. Quit Claude Desktop completely (on macOS that's `Cmd+Q`, not just closing the window) and open
+   it again.
+2. Make sure **Docker Desktop is running** — the server won't start without it.
+3. Ask Claude something like "what does the RC_OPTIONS parameter do?" — Claude will use this tool
    automatically.
+
+## Day-to-day use: starting it without rebuilding
+
+`docker compose build` is needed **only once** — and after that only following a `git pull` or a
+change to the `Dockerfile`/dependencies. Parameter data lives in the `data/` folder and survives
+containers being stopped and deleted, so `ardupilot-refresh` doesn't need repeating either (unless
+you want a fresher firmware version).
+
+**If you're using Claude Desktop (stdio):** there's nothing to start. Claude Desktop launches the
+container itself every time it opens and stops it on exit — so you shouldn't expect to see
+`ardupilot-mcp` among the running containers between sessions. That's normal. The only requirement
+is that **Docker Desktop is running** before Claude Desktop starts. After a reboot: open Docker
+Desktop, wait for it to say "Engine running", then open Claude Desktop. If Claude reports the
+server failed to start, that's almost always the reason.
+
+**If you're using the shared HTTP server:** after a stop or a reboot, bring it back up — the image
+is already built, so nothing gets rebuilt:
+
+```bash
+docker compose up -d mcp-http
+```
+
+Useful commands from inside the project folder:
+
+```bash
+docker compose ps              # is mcp-http running right now
+docker compose logs mcp-http   # logs, if something went wrong
+docker compose stop mcp-http   # stop it (data is kept)
+docker compose start mcp-http  # bring a stopped container back up
+```
+
+The `mcp-http` service is set to `restart: unless-stopped`, so it comes back on its own after a
+reboot once Docker Desktop starts — unless you stopped it deliberately with `docker compose stop`.
 
 ## Advanced: running as a shared server
 
