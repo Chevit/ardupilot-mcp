@@ -13,6 +13,7 @@ and startup is instant, which keeps Claude Desktop responsive.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -177,9 +178,35 @@ def diff_parameter(
 # Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 
+def _server_settings(env: dict[str, str] | None = None) -> tuple[str, str, int]:
+    """Resolve (transport, host, port) from environment variables.
+
+    MCP_TRANSPORT selects "stdio" (default) or "streamable-http". host is
+    always "0.0.0.0" — required for Docker's port publishing to reach the
+    process inside the container; it's simply unused in stdio mode.
+    MCP_HTTP_PORT sets the port for streamable-http mode (default 8000,
+    unused in stdio mode).
+    """
+    env = os.environ if env is None else env
+    transport = env.get("MCP_TRANSPORT", "stdio")
+    if transport not in ("stdio", "streamable-http"):
+        raise ValueError(f"Unknown MCP_TRANSPORT: {transport!r}")
+    port = int(env.get("MCP_HTTP_PORT", "8000"))
+    return transport, "0.0.0.0", port
+
+
 def main() -> None:
-    """stdio transport for Claude Desktop and similar MCP clients."""
-    mcp.run()
+    """Entry point. Transport selected via MCP_TRANSPORT env var.
+
+    Defaults to stdio, for Claude Desktop and similar MCP clients. Set
+    MCP_TRANSPORT=streamable-http (with optional MCP_HTTP_PORT) to serve
+    remote clients instead — see the Docker section of CLAUDE.md.
+    """
+    transport, host, port = _server_settings()
+    if transport == "streamable-http":
+        mcp.settings.host = host
+        mcp.settings.port = port
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":
