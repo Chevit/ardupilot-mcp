@@ -13,87 +13,25 @@ and startup is instant, which keeps Claude Desktop responsive.
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from .db import (
-    DEFAULT_DB_PATH,
-    connect,
-    list_versions as _list_versions_db,
-)
-from .vectors import (
-    DEFAULT_MODEL_CACHE_PATH,
-    DEFAULT_VECTORS_PATH,
-    VectorStore,
-)
+from .catalog import ParameterCatalog
 
 
 mcp = FastMCP("ardupilot-docs")
 
-# Lazy vector store — model weights are only loaded on first semantic query.
-_store: Optional[VectorStore] = None
+# Lazy catalog — the SQLite connection opens on first tool call; the
+# semantic model loads even later, on first semantic_search call.
+_catalog: Optional[ParameterCatalog] = None
 
 
-# --------------------------------------------------------------------------- #
-# Internals                                                                   #
-# --------------------------------------------------------------------------- #
-
-def _get_store() -> VectorStore:
-    global _store
-    if _store is None:
-        _store = VectorStore(
-            path=DEFAULT_VECTORS_PATH,
-            model_cache_path=DEFAULT_MODEL_CACHE_PATH,
-        )
-    return _store
-
-
-def _latest_version(vehicle: str) -> Optional[str]:
-    with connect(DEFAULT_DB_PATH) as conn:
-        versions = _list_versions_db(conn, vehicle)
-    return versions[-1] if versions else None
-
-
-def _row_to_param(
-    conn: sqlite3.Connection, row: sqlite3.Row, include_values: bool = True
-) -> dict[str, Any]:
-    """Convert a parameters row into a JSON-friendly dict, optionally with values."""
-    out = {
-        "id": row["id"],
-        "name": row["name"],
-        "vehicle": row["vehicle"],
-        "firmware_version": row["firmware_version"],
-        "backend": row["backend"],
-        "display_name": row["display_name"],
-        "description": row["description"],
-        "section": row["section"],
-        "units": row["units"],
-        "range": (
-            {"min": row["range_min"], "max": row["range_max"]}
-            if row["range_min"] is not None
-            else None
-        ),
-        "increment": row["increment"],
-        "is_bitmask": bool(row["is_bitmask"]),
-        "read_only": bool(row["read_only"]),
-        "advanced": bool(row["advanced"]),
-        "source_url": row["source_url"],
-    }
-    if include_values:
-        vals = conn.execute(
-            """SELECT value, label, is_bit
-               FROM parameter_values
-               WHERE parameter_id = ?
-               ORDER BY id""",
-            (row["id"],),
-        ).fetchall()
-        out["values"] = [
-            {"value": v["value"], "label": v["label"], "is_bit": bool(v["is_bit"])}
-            for v in vals
-        ]
-    return out
+def _get_catalog() -> ParameterCatalog:
+    global _catalog
+    if _catalog is None:
+        _catalog = ParameterCatalog()
+    return _catalog
 
 
 # --------------------------------------------------------------------------- #
@@ -107,8 +45,7 @@ def list_versions(vehicle: str = "plane") -> list[str]:
     Call this first if you're unsure which versions are indexed. Currently
     only 'plane' is supported. Returns a list like ['4.6.3', '4.8.0'].
     """
-    with connect(DEFAULT_DB_PATH) as conn:
-        return _list_versions_db(conn, vehicle)
+    return _get_catalog().list_versions(vehicle)
 
 
 @mcp.tool()
@@ -131,34 +68,7 @@ def lookup_parameter(
         firmware_version: e.g. "4.8.0" or "4.6.3". Omit to use the latest.
         vehicle: "plane" (only supported vehicle for now).
     """
-    if firmware_version is None:
-        firmware_version = _latest_version(vehicle)
-        if firmware_version is None:
-            return None
-    with connect(DEFAULT_DB_PATH) as conn:
-        # Prefer the main definition (backend IS NULL) over driver variants.
-        row = conn.execute(
-            """SELECT * FROM parameters
-               WHERE vehicle = ? AND firmware_version = ? AND name = ?
-               ORDER BY (backend IS NULL) DESC
-               LIMIT 1""",
-            (vehicle, firmware_version, name),
-        ).fetchone()
-        if row is None:
-            return None
-        param = _row_to_param(conn, row)
-
-        # If backend variants exist, expose them as a compact summary.
-        variants = conn.execute(
-            """SELECT backend FROM parameters
-               WHERE vehicle = ? AND firmware_version = ? AND name = ?
-                 AND backend IS NOT NULL
-               ORDER BY backend""",
-            (vehicle, firmware_version, name),
-        ).fetchall()
-        if variants:
-            param["backend_variants"] = [v["backend"] for v in variants]
-        return param
+    return _get_catalog().lookup_parameter(name, firmware_version, vehicle)
 
 
 @mcp.tool()
@@ -183,29 +93,7 @@ def search_parameters(
         limit: Maximum results (default 10).
         vehicle: "plane".
     """
-    fw_filter_sql = ""
-    fw_params: tuple = ()
-    if firmware_version is not None:
-        fw_filter_sql = " AND p.firmware_version = ?"
-        fw_params = (firmware_version,)
-
-    with connect(DEFAULT_DB_PATH) as conn:
-        rows = conn.execute(
-            f"""SELECT p.*, snippet(parameters_fts, 2, '[', ']', ' ... ', 12) AS snippet
-                FROM parameters_fts
-                JOIN parameters p ON p.id = parameters_fts.rowid
-                WHERE parameters_fts MATCH ?
-                  AND p.vehicle = ?{fw_filter_sql}
-                ORDER BY rank
-                LIMIT ?""",
-            (query, vehicle, *fw_params, limit),
-        ).fetchall()
-        out: list[dict[str, Any]] = []
-        for r in rows:
-            p = _row_to_param(conn, r, include_values=False)
-            p["snippet"] = r["snippet"]
-            out.append(p)
-        return out
+    return _get_catalog().search_parameters(query, firmware_version, limit, vehicle)
 
 
 @mcp.tool()
@@ -230,33 +118,7 @@ def semantic_search(
         k: Number of results to return (default 5).
         vehicle: "plane".
     """
-    fw = _latest_version(vehicle)
-    if fw is None:
-        return []
-    store = _get_store()
-    hits = store.search(query, k=k, firmware_version=fw)
-    if not hits:
-        return []
-    ids = [h["param_id"] for h in hits]
-    with connect(DEFAULT_DB_PATH) as conn:
-        # Fetch in-DB order then reorder to match ranking
-        rows = {
-            r["id"]: r
-            for r in conn.execute(
-                f"""SELECT * FROM parameters
-                    WHERE id IN ({','.join('?' * len(ids))})""",
-                ids,
-            )
-        }
-        out: list[dict[str, Any]] = []
-        for h in hits:
-            r = rows.get(h["param_id"])
-            if r is None:
-                continue
-            p = _row_to_param(conn, r, include_values=False)
-            p["distance"] = float(h["_distance"])
-            out.append(p)
-        return out
+    return _get_catalog().semantic_search(query, k, vehicle)
 
 
 @mcp.tool()
@@ -281,32 +143,7 @@ def list_parameters(
         vehicle: "plane".
         limit: Maximum results (default 50).
     """
-    if firmware_version is None:
-        firmware_version = _latest_version(vehicle)
-        if firmware_version is None:
-            return []
-
-    where = ["vehicle = ?", "firmware_version = ?", "backend IS NULL"]
-    params: list[Any] = [vehicle, firmware_version]
-    if prefix:
-        where.append("name LIKE ? ESCAPE '\\'")
-        # Escape LIKE wildcards in the prefix itself, then append %
-        safe_prefix = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        params.append(f"{safe_prefix}%")
-    if section:
-        where.append("LOWER(section) = LOWER(?)")
-        params.append(section)
-    params.append(limit)
-
-    with connect(DEFAULT_DB_PATH) as conn:
-        rows = conn.execute(
-            f"""SELECT * FROM parameters
-                WHERE {' AND '.join(where)}
-                ORDER BY name
-                LIMIT ?""",
-            params,
-        ).fetchall()
-        return [_row_to_param(conn, r, include_values=False) for r in rows]
+    return _get_catalog().list_parameters(prefix, section, firmware_version, vehicle, limit)
 
 
 @mcp.tool()
@@ -333,53 +170,7 @@ def diff_parameter(
         version_b: e.g. "4.8.0".
         vehicle: "plane".
     """
-    def _fetch(conn: sqlite3.Connection, fw: str) -> Optional[dict[str, Any]]:
-        row = conn.execute(
-            """SELECT * FROM parameters
-               WHERE vehicle = ? AND firmware_version = ? AND name = ?
-                 AND backend IS NULL
-               LIMIT 1""",
-            (vehicle, fw, name),
-        ).fetchone()
-        return _row_to_param(conn, row) if row is not None else None
-
-    with connect(DEFAULT_DB_PATH) as conn:
-        a = _fetch(conn, version_a)
-        b = _fetch(conn, version_b)
-
-    result: dict[str, Any] = {
-        "name": name,
-        "version_a": version_a,
-        "version_b": version_b,
-        "exists_in_a": a is not None,
-        "exists_in_b": b is not None,
-        "differences": [],
-    }
-    if a is None or b is None:
-        return result
-
-    fields = ("description", "section", "units", "range", "increment",
-              "is_bitmask", "read_only", "advanced", "display_name")
-    for f in fields:
-        if a.get(f) != b.get(f):
-            result["differences"].append({
-                "field": f,
-                "version_a": a.get(f),
-                "version_b": b.get(f),
-            })
-
-    # Values / bitmask bits — compare as ordered lists of (value, label, is_bit)
-    def _val_tuples(p: dict) -> list[tuple]:
-        return [(v["value"], v["label"], v["is_bit"]) for v in p.get("values", [])]
-
-    if _val_tuples(a) != _val_tuples(b):
-        result["differences"].append({
-            "field": "values",
-            "version_a": a.get("values"),
-            "version_b": b.get("values"),
-        })
-
-    return result
+    return _get_catalog().diff_parameter(name, version_a, version_b, vehicle)
 
 
 # --------------------------------------------------------------------------- #
