@@ -27,6 +27,55 @@ uv run python -m ardupilot_mcp.ingest \
 Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main`,
 `ardupilot-refresh` → `ingest:main` (note: *not* `scripts/refresh.py`, which is unused).
 
+## Docker
+
+Alternative to the local `uv` workflow above — builds the same console
+scripts into an image, runs via `docker compose`. See
+`docs/superpowers/specs/2026-08-06-docker-compose-launch-design.md` for the
+full design rationale.
+
+```bash
+# Build the image (both services share it)
+docker compose build
+
+# Ingest through the container instead of a host uv environment — same
+# CLI, same flags as the "Commands" section above, writes into the
+# bind-mounted ./data
+docker compose run --rm mcp-stdio ardupilot-refresh \
+    --html "data/ardupilot-docs/Complete Parameter List — Plane documentation 4.8.0.html" \
+    --vehicle plane \
+    --firmware-version 4.8.0 \
+    --source-url https://ardupilot.org/plane/docs/parameters.html \
+    --build-vectors
+```
+
+**Local stdio client** (Claude Desktop/Code on the same machine as the
+Docker host) — point the client's MCP server command at compose, run from
+the repo root:
+
+```json
+{
+  "mcpServers": {
+    "ardupilot": {
+      "command": "docker",
+      "args": ["compose", "run", "--rm", "mcp-stdio"]
+    }
+  }
+}
+```
+
+**Remote HTTP client** (Claude client on a different machine than the
+Docker host) — start the long-running service on the host that has the
+data:
+
+```bash
+docker compose up -d mcp-http
+```
+
+Then point the remote client at `http://<docker-host>:8000/mcp`. No
+app-level auth is built in — only expose `mcp-http` on a trusted network,
+VPN, or behind a reverse proxy that adds auth.
+
 ## Architecture
 
 - `db.py` — SQLite schema + query layer. `parameters` + `parameter_values` tables,
