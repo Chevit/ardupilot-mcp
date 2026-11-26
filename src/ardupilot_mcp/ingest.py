@@ -34,7 +34,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import httpx
 
@@ -73,19 +73,19 @@ class VehicleIngestOutcome(NamedTuple):
     failed — the run continues past it rather than aborting everything."""
     vehicle: str
     success: bool
-    count: Optional[int] = None
-    firmware_version: Optional[str] = None
-    error: Optional[str] = None
+    count: int | None = None
+    firmware_version: str | None = None
+    error: str | None = None
 
 
 def _fetch_and_archive(
     url: str,
-    vehicle: Optional[str],
-    firmware_version: Optional[str],
-    source_url: Optional[str],
+    vehicle: str | None,
+    firmware_version: str | None,
+    source_url: str | None,
     archive_dir: Path,
-    http_client: Optional[httpx.Client],
-    vehicles_config: Optional[Path],
+    http_client: httpx.Client | None,
+    vehicles_config: Path | None,
     verbose: bool,
 ) -> tuple[Path, str, str, str]:
     """Fetch `url`, auto-detect vehicle/version, archive HTML to disk.
@@ -126,17 +126,17 @@ def _fetch_and_archive(
 
 
 def ingest(
-    html_path: Optional[Path] = None,
-    url: Optional[str] = None,
-    vehicle: Optional[str] = None,
-    firmware_version: Optional[str] = None,
-    source_url: Optional[str] = None,
+    html_path: Path | None = None,
+    url: str | None = None,
+    vehicle: str | None = None,
+    firmware_version: str | None = None,
+    source_url: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     build_vectors: bool = False,
-    vectors_path: Optional[Path] = None,
+    vectors_path: Path | None = None,
     archive_dir: Path = DEFAULT_ARCHIVE_DIR,
-    http_client: Optional[httpx.Client] = None,
-    vehicles_config: Optional[Path] = None,
+    http_client: httpx.Client | None = None,
+    vehicles_config: Path | None = None,
     verbose: bool = False,
 ) -> IngestResult:
     """Get the HTML (from disk or a URL) and write every parameter into the DB.
@@ -224,7 +224,7 @@ def ingest(
 
 def _resolve_target_vehicles(
     roster: dict[str, VehicleEntry],
-    vehicles: Optional[list[str]],
+    vehicles: list[str] | None,
 ) -> list[str]:
     """Turn the caller's vehicle selection into the list to actually ingest.
 
@@ -236,6 +236,16 @@ def _resolve_target_vehicles(
     so a typo aborts the whole run rather than costing the correctly-spelled
     vehicles their fetches. Duplicates are collapsed, first occurrence
     winning, so the caller sees progress in the order they asked for.
+
+    Args:
+        roster: The loaded Vehicle Roster, keyed by vehicle name.
+        vehicles: Names to ingest, or `None` for every enabled Vehicle.
+
+    Returns:
+        The vehicle names to ingest, in order, without duplicates.
+
+    Raises:
+        ValueError: If any name in `vehicles` is not on the Roster.
     """
     if vehicles is None:
         return enabled_vehicles(roster)
@@ -255,13 +265,13 @@ def _resolve_target_vehicles(
 
 
 def ingest_all(
-    vehicles: Optional[list[str]] = None,
-    vehicles_config: Optional[Path] = None,
+    vehicles: list[str] | None = None,
+    vehicles_config: Path | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     build_vectors: bool = False,
-    vectors_path: Optional[Path] = None,
+    vectors_path: Path | None = None,
     archive_dir: Path = DEFAULT_ARCHIVE_DIR,
-    http_client: Optional[httpx.Client] = None,
+    http_client: httpx.Client | None = None,
     verbose: bool = False,
 ) -> list[VehicleIngestOutcome]:
     """Ingest several Vehicles from the Roster in one call.
@@ -279,6 +289,22 @@ def ingest_all(
     If `build_vectors=True`, the semantic index is rebuilt once at the end,
     covering every vehicle that succeeded — not once per vehicle, since that
     would reload the embedding model on every single vehicle.
+
+    Args:
+        vehicles: Roster names to ingest, or `None` for every enabled Vehicle.
+        vehicles_config: Path to a non-default Vehicle Roster file.
+        db_path: SQLite database to write into.
+        build_vectors: Rebuild the semantic index once after all vehicles.
+        vectors_path: LanceDB directory; `None` uses the default location.
+        archive_dir: Where fetched HTML pages are saved.
+        http_client: Client used for fetching; `None` creates a default one.
+        verbose: Print progress for each vehicle.
+
+    Returns:
+        One VehicleIngestOutcome per vehicle attempted, in ingest order.
+
+    Raises:
+        ValueError: If `vehicles` names a vehicle not on the Roster.
     """
     roster = load_roster(vehicles_config)
     outcomes: list[VehicleIngestOutcome] = []
@@ -317,7 +343,7 @@ def ingest_all(
     return outcomes
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Ingest ArduPilot parameter reference HTML into SQLite.",
     )
