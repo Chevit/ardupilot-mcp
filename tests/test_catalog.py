@@ -280,5 +280,31 @@ def test_fresh_store_answers_without_schema_errors(tmp_path, roster_path):
 
 # -- semantic_search -- #
 
+def test_semantic_search_survives_reingest_without_vector_rebuild(catalog, db_path):
+    # Re-ingest mints new SQLite row ids; the index (built before) must
+    # still resolve its hits, and return the fresh SQLite definition.
+    from ardupilot_mcp.vectors import EMBEDDING_DIM, rebuild_from_db
+
+    def const_encoder(texts):
+        return [[1.0] * EMBEDDING_DIM for _ in texts]
+
+    rebuild_from_db(catalog._store, vehicle="plane", db_path=db_path, encoder=const_encoder)
+    with db.connect(db_path) as conn:
+        db.reset_vehicle(conn, "plane")
+        db.upsert_parameter(
+            conn,
+            db.Parameter(vehicle="plane", firmware_version="4.8.0", name="RC_OPTIONS",
+                         description="re-ingested description"),
+            scraped_at="2026-02-01T00:00:00+00:00",
+        )
+    catalog._store._encode_queries = const_encoder
+
+    results = catalog.semantic_search("rc options", vehicle="plane")
+
+    assert [(r["name"], r["description"]) for r in results] == [
+        ("RC_OPTIONS", "re-ingested description"),
+    ]
+
+
 def test_semantic_search_returns_empty_when_no_vector_index(catalog):
     assert catalog.semantic_search("why is my plane climbing", vehicle="plane") == []

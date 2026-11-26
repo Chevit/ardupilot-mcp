@@ -150,16 +150,16 @@ class VectorStore:
         rows are left untouched.
 
         Each input row must contain:
-            param_id (int), name (str), vehicle (str),
-            firmware_version (str), text (str)
+            name (str), vehicle (str), firmware_version (str), text (str)
         All rows must belong to `vehicle` — this is a per-vehicle replace,
-        not a general-purpose bulk load.
+        not a general-purpose bulk load. A row's identity is (vehicle,
+        name): SQLite row ids change on every re-ingest, so the index never
+        stores them.
 
         `text` is what gets embedded and is NOT retained after this call.
         If `encoder` is None, the real e5 model is used.
         """
         schema = pa.schema([
-            ("param_id",         pa.int64()),
             ("name",             pa.string()),
             ("vehicle",          pa.string()),
             ("firmware_version", pa.string()),
@@ -172,12 +172,23 @@ class VectorStore:
             vectors = self._encode_passages(texts) if encoder is None else encoder(texts)
             for r, v in zip(rows, vectors):
                 records.append({
-                    "param_id": int(r["param_id"]),
                     "name": r["name"],
                     "vehicle": r["vehicle"],
                     "firmware_version": r["firmware_version"],
                     "vector": v,
                 })
+
+        if self._has_table() and "param_id" in self._db.open_table(TABLE_NAME).schema.names:
+            # Legacy table keyed by SQLite row id: incompatible schema, and
+            # its other vehicles' rows can't be rewritten without their
+            # passages — drop it whole and say how to refill it.
+            self._db.drop_table(TABLE_NAME)
+            print(
+                "[vectors] replaced a legacy-schema index; other vehicles' "
+                "vectors were dropped — run `ardupilot-refresh --all "
+                "--build-vectors` to rebuild them",
+                file=sys.stderr,
+            )
 
         if self._has_table():
             table = self._db.open_table(TABLE_NAME)
@@ -203,7 +214,7 @@ class VectorStore:
         `vehicles`: restrict to these vehicle names, or None to search
         every vehicle present in the index.
 
-        Each result is a dict with `param_id`, `name`, `vehicle`,
+        Each result is a dict with `name`, `vehicle`,
         `firmware_version`, and `_distance` (LanceDB's cosine distance).
         """
         if not self._has_table():
@@ -280,7 +291,6 @@ def rebuild_from_db(
             values=values_by_pid.get(p["id"], []),
         )
         rows.append({
-            "param_id": p["id"],
             "name": p["name"],
             "vehicle": p["vehicle"],
             "firmware_version": p["firmware_version"],

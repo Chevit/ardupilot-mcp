@@ -64,19 +64,24 @@ def _identity_encoder(texts: list[str]) -> list[list[float]]:
 
 
 def _rows(*specs) -> list[dict]:
-    """specs: (param_id, name, vehicle, firmware_version, text) tuples."""
+    """specs: (name, vehicle, firmware_version, text) tuples."""
     return [
-        {"param_id": pid, "name": name, "vehicle": vehicle,
-         "firmware_version": fw, "text": text}
-        for pid, name, vehicle, fw, text in specs
+        {"name": name, "vehicle": vehicle, "firmware_version": fw, "text": text}
+        for name, vehicle, fw, text in specs
     ]
+
+
+def _keys(hits) -> set[tuple[str, str, str]]:
+    """Hits as (vehicle, name, firmware_version) — the index's identity
+    is (vehicle, name); firmware_version tells old rows from new."""
+    return {(h["vehicle"], h["name"], h["firmware_version"]) for h in hits}
 
 
 def test_rebuild_and_search_roundtrip(tmp_path):
     store = _store(tmp_path)
     rows = _rows(
-        (1, "RC_OPTIONS", "plane", "4.8.0", "RC input options"),
-        (2, "LOG_BITMASK", "plane", "4.8.0", "Log bitmask control"),
+        ("RC_OPTIONS", "plane", "4.8.0", "RC input options"),
+        ("LOG_BITMASK", "plane", "4.8.0", "Log bitmask control"),
     )
 
     n = store.rebuild(rows, vehicle="plane", encoder=_identity_encoder)
@@ -85,7 +90,8 @@ def test_rebuild_and_search_roundtrip(tmp_path):
     hits = store.search(
         "RC input options", k=5, vehicles=["plane"], encoder=_identity_encoder
     )
-    assert hits[0]["param_id"] == 1
+    assert (hits[0]["vehicle"], hits[0]["name"]) == ("plane", "RC_OPTIONS")
+    assert "param_id" not in hits[0]
 
 
 def test_rebuild_replaces_only_the_given_vehicle(tmp_path):
@@ -93,35 +99,35 @@ def test_rebuild_replaces_only_the_given_vehicle(tmp_path):
     # must not touch copter's rows.
     store = _store(tmp_path)
     store.rebuild(
-        _rows((1, "RC_OPTIONS", "plane", "4.6.3", "old plane text")),
+        _rows(("RC_OPTIONS", "plane", "4.6.3", "old plane text")),
         vehicle="plane", encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "copter text")),
+        _rows(("RC_OPTIONS", "copter", "4.8.0", "copter text")),
         vehicle="copter", encoder=_identity_encoder,
     )
 
     # Re-ingest plane at a new version — old plane row gone, copter intact.
     store.rebuild(
-        _rows((3, "RC_OPTIONS", "plane", "4.8.0", "new plane text")),
+        _rows(("RC_OPTIONS", "plane", "4.8.0", "new plane text")),
         vehicle="plane", encoder=_identity_encoder,
     )
 
     hits = store.search(
         "new plane text", k=10, vehicles=None, encoder=_identity_encoder
     )
-    ids = {h["param_id"] for h in hits}
-    assert ids == {2, 3}  # id 1 (old plane) is gone; copter (2) untouched
+    # old plane (4.6.3) is gone; copter untouched
+    assert _keys(hits) == {("copter", "RC_OPTIONS", "4.8.0"), ("plane", "RC_OPTIONS", "4.8.0")}
 
 
 def test_rebuild_with_empty_rows_clears_that_vehicle(tmp_path):
     store = _store(tmp_path)
     store.rebuild(
-        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "text")),
+        _rows(("RC_OPTIONS", "plane", "4.8.0", "text")),
         vehicle="plane", encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "text")),
+        _rows(("RC_OPTIONS", "copter", "4.8.0", "text")),
         vehicle="copter", encoder=_identity_encoder,
     )
 
@@ -129,21 +135,21 @@ def test_rebuild_with_empty_rows_clears_that_vehicle(tmp_path):
 
     assert n == 0
     hits = store.search("text", k=10, vehicles=None, encoder=_identity_encoder)
-    assert [h["param_id"] for h in hits] == [2]
+    assert [h["vehicle"] for h in hits] == ["copter"]
 
 
 def test_search_vehicles_filters_to_given_vehicles(tmp_path):
     store = _store(tmp_path)
     store.rebuild(
-        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "plane", "4.8.0", "RC input options")),
         vehicle="plane", encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "copter", "4.8.0", "RC input options")),
         vehicle="copter", encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((3, "RC_OPTIONS", "rover", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "rover", "4.8.0", "RC input options")),
         vehicle="rover", encoder=_identity_encoder,
     )
 
@@ -151,17 +157,17 @@ def test_search_vehicles_filters_to_given_vehicles(tmp_path):
         "RC input options", k=10, vehicles=["plane", "rover"], encoder=_identity_encoder
     )
 
-    assert {h["param_id"] for h in hits} == {1, 3}
+    assert {h["vehicle"] for h in hits} == {"plane", "rover"}
 
 
 def test_search_vehicles_none_searches_everything_in_the_table(tmp_path):
     store = _store(tmp_path)
     store.rebuild(
-        _rows((1, "RC_OPTIONS", "plane", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "plane", "4.8.0", "RC input options")),
         vehicle="plane", encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "copter", "4.8.0", "RC input options")),
         vehicle="copter", encoder=_identity_encoder,
     )
 
@@ -169,18 +175,18 @@ def test_search_vehicles_none_searches_everything_in_the_table(tmp_path):
         "RC input options", k=10, vehicles=None, encoder=_identity_encoder
     )
 
-    assert {h["param_id"] for h in hits} == {1, 2}
+    assert {h["vehicle"] for h in hits} == {"plane", "copter"}
 
 
 def test_search_vehicle_with_special_characters(tmp_path):
     store = _store(tmp_path)
     tricky_vehicle = "plane'; DROP TABLE parameters; --"
     store.rebuild(
-        _rows((1, "RC_OPTIONS", tricky_vehicle, "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", tricky_vehicle, "4.8.0", "RC input options")),
         vehicle=tricky_vehicle, encoder=_identity_encoder,
     )
     store.rebuild(
-        _rows((2, "RC_OPTIONS", "copter", "4.8.0", "RC input options")),
+        _rows(("RC_OPTIONS", "copter", "4.8.0", "RC input options")),
         vehicle="copter", encoder=_identity_encoder,
     )
 
@@ -188,19 +194,47 @@ def test_search_vehicle_with_special_characters(tmp_path):
         "RC input options", k=5, vehicles=[tricky_vehicle], encoder=_identity_encoder
     )
 
-    assert [h["param_id"] for h in hits] == [1]
+    assert [h["vehicle"] for h in hits] == [tricky_vehicle]
 
     # And rebuilding that same tricky vehicle only replaces its own rows.
     store.rebuild(
-        _rows((3, "RC_OPTIONS", tricky_vehicle, "4.8.0", "updated text")),
+        _rows(("RC_OPTIONS", tricky_vehicle, "4.8.0", "updated text")),
         vehicle=tricky_vehicle, encoder=_identity_encoder,
     )
     hits = store.search(
         "updated text", k=10, vehicles=None, encoder=_identity_encoder
     )
-    assert {h["param_id"] for h in hits} == {2, 3}
+    assert sorted(h["vehicle"] for h in hits) == sorted(["copter", tricky_vehicle])
 
 
 def test_search_returns_empty_when_no_table(tmp_path):
     store = _store(tmp_path)
     assert store.search("anything", encoder=_identity_encoder) == []
+
+
+def test_rebuild_replaces_a_legacy_param_id_table(tmp_path, capsys):
+    # Tables built before vectors were keyed by (vehicle, name) carry a
+    # param_id column; rebuild() replaces the whole table and says so.
+    import lancedb
+    import pyarrow as pa
+
+    path = tmp_path / "vectors.lance"
+    legacy = pa.schema([
+        ("param_id", pa.int64()), ("name", pa.string()), ("vehicle", pa.string()),
+        ("firmware_version", pa.string()),
+        ("vector", pa.list_(pa.float32(), EMBEDDING_DIM)),
+    ])
+    lancedb.connect(str(path)).create_table("parameters", data=[{
+        "param_id": 7, "name": "OLD", "vehicle": "copter", "firmware_version": "4.7.0",
+        "vector": [0.0] * EMBEDDING_DIM,
+    }], schema=legacy)
+
+    store = _store(tmp_path)
+    store.rebuild(
+        _rows(("RC_OPTIONS", "plane", "4.8.0", "RC input options")),
+        vehicle="plane", encoder=_identity_encoder,
+    )
+
+    hits = store.search("RC input options", k=10, encoder=_identity_encoder)
+    assert _keys(hits) == {("plane", "RC_OPTIONS", "4.8.0")}
+    assert "--all --build-vectors" in capsys.readouterr().err

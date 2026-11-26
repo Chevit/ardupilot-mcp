@@ -106,21 +106,27 @@ class ParameterCatalog:
         If `vehicles_by_name` is given, each result also carries a
         `vehicles` field — every vehicle whose match collapsed into this
         one (see semantic_search's vehicle=None dedup).
+
+        Hits are joined on (vehicle, name) to the main definition, never on
+        SQLite row id: ids change on every re-ingest, and the index may not
+        have been rebuilt since. A hit whose parameter no longer exists is
+        skipped.
         """
         if not hits:
             return []
-        ids = [h["param_id"] for h in hits]
+        keys = [(h["vehicle"], h["name"]) for h in hits]
         rows = {
-            r["id"]: r
+            (r["vehicle"], r["name"]): r
             for r in self._conn.execute(
                 f"""SELECT * FROM parameters
-                    WHERE id IN ({','.join('?' * len(ids))})""",
-                ids,
+                    WHERE backend IS NULL
+                      AND (vehicle, name) IN (VALUES {','.join(['(?, ?)'] * len(keys))})""",
+                [x for k in keys for x in k],
             )
         }
         out: list[dict[str, Any]] = []
         for h in hits:
-            r = rows.get(h["param_id"])
+            r = rows.get((h["vehicle"], h["name"]))
             if r is None:
                 continue
             p = self._row_to_param(r, include_values=False)
