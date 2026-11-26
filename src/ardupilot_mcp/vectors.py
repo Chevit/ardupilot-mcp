@@ -1,7 +1,10 @@
 """Semantic search layer.
 
 Embeds parameter descriptions with `intfloat/multilingual-e5-small` (384-dim,
-~120 MB, multilingual including Ukrainian) and stores them in LanceDB.
+multilingual including Ukrainian) and stores them in LanceDB. The model runs
+through onnxruntime from the repo's own fp32 ONNX export (~470 MB, downloaded
+on first use) rather than sentence-transformers, which would pull in ~650 MB
+of torch/scipy/sklearn/sympy — see docs/adr/0003-onnx-embeddings.md.
 
 The vector table holds every Vehicle at once, one firmware version per
 Vehicle (see docs/adr/0001-single-firmware-version-per-vehicle.md).
@@ -12,6 +15,10 @@ Note on e5 models: they require task-specific prefixes for correct behaviour.
   - passages being indexed:  "passage: {text}"
   - queries at search time:  "query: {text}"
 Skipping the prefixes silently degrades retrieval quality.
+
+Vectors are mean-pooled over the attention mask and L2-normalised (what the
+model's sentence-transformers config does), so LanceDB's default L2 distance
+ranks identically to cosine.
 """
 
 from __future__ import annotations
@@ -19,15 +26,13 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 import lancedb
+import numpy as np
 import pyarrow as pa
 
 from .db import DEFAULT_DB_PATH, connect, ingested_version
-
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
 
 
 DEFAULT_VECTORS_PATH = (
@@ -42,6 +47,48 @@ TABLE_NAME = "parameters"
 
 # Type of an encoder callable: takes a list of strings, returns matching vectors.
 Encoder = Callable[[list[str]], list[list[float]]]
+
+_MAX_TOKENS = 512  # e5-small's position limit; longer passages are truncated.
+
+
+class E5OnnxModel:
+    """multilingual-e5 via onnxruntime: tokenize, run, mean-pool, L2-normalise.
+
+    Prefixing ("query: " / "passage: ") is the caller's job — see
+    VectorStore._encode_passages/_encode_queries.
+    """
+
+    def __init__(self, model_name: str, cache_folder: Path) -> None:
+        # Imported here so processes that never run semantic search (tests,
+        # keyword-only tool calls) don't pay the onnxruntime import cost.
+        import onnxruntime as ort
+        from huggingface_hub import hf_hub_download
+        from tokenizers import Tokenizer
+
+        model_path = hf_hub_download(model_name, "onnx/model.onnx", cache_dir=cache_folder)
+        tok_path = hf_hub_download(model_name, "onnx/tokenizer.json", cache_dir=cache_folder)
+        self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        self._tokenizer = Tokenizer.from_file(tok_path)
+        self._tokenizer.enable_truncation(_MAX_TOKENS)
+        self._tokenizer.enable_padding(pad_id=self._tokenizer.token_to_id("<pad>"))
+
+    def encode(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
+        """Embed `texts` into an (n, EMBEDDING_DIM) float32 array of unit vectors."""
+        out = []
+        for i in range(0, len(texts), batch_size):
+            enc = self._tokenizer.encode_batch(texts[i : i + batch_size])
+            ids = np.array([e.ids for e in enc], dtype=np.int64)
+            mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+            hidden = self._session.run(
+                ["last_hidden_state"],
+                {"input_ids": ids, "attention_mask": mask, "token_type_ids": np.zeros_like(ids)},
+            )[0]
+            m = mask[..., None].astype(np.float32)
+            pooled = (hidden * m).sum(axis=1) / np.clip(m.sum(axis=1), 1e-9, None)
+            out.append(pooled / np.linalg.norm(pooled, axis=1, keepdims=True))
+        if not out:
+            return np.zeros((0, EMBEDDING_DIM), dtype=np.float32)
+        return np.concatenate(out).astype(np.float32)
 
 
 # --------------------------------------------------------------------------- #
@@ -101,7 +148,7 @@ class VectorStore:
         self.model_cache_path = Path(model_cache_path)
         self.model_cache_path.mkdir(parents=True, exist_ok=True)
         self.model_name = model_name
-        self._model: Optional["SentenceTransformer"] = None
+        self._model: Optional[E5OnnxModel] = None
         self._db = lancedb.connect(str(self.path))
 
     def _has_table(self) -> bool:
@@ -114,29 +161,21 @@ class VectorStore:
 
     # -- model management (lazy) -- #
     @property
-    def model(self) -> "SentenceTransformer":
+    def model(self) -> E5OnnxModel:
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(
-                self.model_name,
-                cache_folder=str(self.model_cache_path),
-            )
+            self._model = E5OnnxModel(self.model_name, self.model_cache_path)
         return self._model
 
     def _encode_passages(self, texts: list[str]) -> list[list[float]]:
         """Encode passages for indexing, with the e5 'passage:' prefix."""
         prefixed = ["passage: " + t for t in texts]
-        arr = self.model.encode(
-            prefixed, batch_size=64, show_progress_bar=False, convert_to_numpy=True
-        )
+        arr = self.model.encode(prefixed, batch_size=64)
         return [row.tolist() for row in arr]
 
     def _encode_queries(self, texts: list[str]) -> list[list[float]]:
         """Encode queries for search, with the e5 'query:' prefix."""
         prefixed = ["query: " + t for t in texts]
-        arr = self.model.encode(
-            prefixed, batch_size=64, show_progress_bar=False, convert_to_numpy=True
-        )
+        arr = self.model.encode(prefixed, batch_size=64)
         return [row.tolist() for row in arr]
 
     # -- indexing -- #
@@ -215,7 +254,8 @@ class VectorStore:
         every vehicle present in the index.
 
         Each result is a dict with `name`, `vehicle`,
-        `firmware_version`, and `_distance` (LanceDB's cosine distance).
+        `firmware_version`, and `_distance` (LanceDB's default L2 distance;
+        vectors are unit-length, so it ranks the same as cosine).
         """
         if not self._has_table():
             return []

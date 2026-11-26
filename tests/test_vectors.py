@@ -3,7 +3,7 @@
 These tests never download the real e5 model: VectorStore.rebuild()/search()
 already accept an `encoder` override for exactly this purpose, and the
 internal _encode_passages/_encode_queries prefixing is tested by swapping in
-a recording fake SentenceTransformer.
+a recording fake model.
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from ardupilot_mcp.vectors import EMBEDDING_DIM, VectorStore
 
 
 class _RecordingModel:
-    """Fake SentenceTransformer that records what it was asked to encode."""
+    """Fake E5OnnxModel that records what it was asked to encode."""
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    def encode(self, texts, batch_size=64, show_progress_bar=False, convert_to_numpy=True):
+    def encode(self, texts, batch_size=64):
         self.calls.append(list(texts))
         return np.zeros((len(texts), EMBEDDING_DIM), dtype="float32")
 

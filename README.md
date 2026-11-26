@@ -310,7 +310,7 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
   замовчуванням `8000`), наприклад `PORT=9000 docker compose up -d mcp-http`.
 
 Шляхи сховища за замовчуванням: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
-`data/model-cache/` (ваги моделі e5). `ardupilot-refresh` приймає `--db` і `--vectors-path`, щоб
+`data/model-cache/` (ONNX-модель e5, ~470 МБ, завантажується при першому семантичному запиті). Сховища, зібрані до переходу на onnxruntime, варто перебудувати командою `ardupilot-refresh --all --build-vectors` (див. `docs/adr/0004-onnx-embeddings.md`). `ardupilot-refresh` приймає `--db` і `--vectors-path`, щоб
 їх перевизначити, та `-q`/`--quiet` для тихого виводу.
 
 ## MCP-інструменти
@@ -679,7 +679,7 @@ Server environment variables:
   e.g. `PORT=9000 docker compose up -d mcp-http`.
 
 Default store paths: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
-`data/model-cache/` (e5 model weights). `ardupilot-refresh` takes `--db` and `--vectors-path` to
+`data/model-cache/` (e5 ONNX model, ~470 MB, downloaded on first semantic use). Stores built before the switch to onnxruntime should be rebuilt with `ardupilot-refresh --all --build-vectors` (see `docs/adr/0004-onnx-embeddings.md`). `ardupilot-refresh` takes `--db` and `--vectors-path` to
 override them, and `-q`/`--quiet` to suppress progress output.
 
 ## MCP tools

@@ -139,7 +139,8 @@ VPN, or behind a reverse proxy that adds auth.
   once at the end (not once per vehicle — avoids reloading the embedding model repeatedly).
   `--roster NAME...` is the same loop scoped to the named vehicles — both go through
   `ingest_all()`, which takes `vehicles: list[str] | None` (`None` = every enabled vehicle).
-- `vectors.py` — LanceDB-backed semantic search layer using `intfloat/multilingual-e5-small`.
+- `vectors.py` — LanceDB-backed semantic search layer using `intfloat/multilingual-e5-small`,
+  run through onnxruntime (`E5OnnxModel`: mean pooling + L2 norm are ours — see ADR 0004).
   One table holds every vehicle; `rebuild()` replaces only the given vehicle's slice.
 - `catalog.py` — the seam through which all six tools query SQLite + the vector store + the
   Vehicle Roster.
@@ -148,7 +149,7 @@ VPN, or behind a reverse proxy that adds auth.
   `vehicle` has no default anywhere.
 
 Default store paths: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
-`data/model-cache/` (e5 weights).
+`data/model-cache/` (e5 ONNX weights).
 
 ## Gotchas
 

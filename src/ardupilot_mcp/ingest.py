@@ -228,7 +228,7 @@ def rebuild_vectors(
     if not vehicles:
         return
     # Imported lazily so users who never enable vectors don't pay the
-    # sentence-transformers / torch import cost.
+    # lancedb / pyarrow import cost (onnxruntime loads later still, on first encode).
     from .vectors import DEFAULT_VECTORS_PATH, VectorStore, rebuild_from_db
     store = VectorStore(path=vectors_path or DEFAULT_VECTORS_PATH)
     for name in vehicles:
