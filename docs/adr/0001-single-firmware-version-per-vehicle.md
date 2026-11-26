@@ -29,7 +29,8 @@ across two versions.
   cross-vehicle diff may compare 4.7.0 against 4.8.0. The payload therefore
   carries `version_a`/`version_b` plus a `version_mismatch` flag rather than
   refusing the query — a legitimate comparison should not fail because of an
-  unrelated config choice.
+  unrelated config choice. *(Superseded by ADR 0003: the diff payload no
+  longer carries version fields.)*
 - ArduPilot only publishes pinned `parameters-<Vehicle>-stable-V<x.y.z>.html`
   URLs for *superseded* versions; the current stable lives at unversioned
   `parameters.html` only. Every version except the newest can be pinned, and the

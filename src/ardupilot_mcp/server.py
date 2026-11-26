@@ -71,7 +71,7 @@ def lookup_parameter(name: str, vehicle: str) -> dict[str, Any] | None:
     and any enum/bitmask values. Returns None if not found.
 
     Args:
-        name: Exact parameter name, case-sensitive (e.g. "RC_OPTIONS").
+        name: Exact parameter name (e.g. "RC_OPTIONS"); case-insensitive.
         vehicle: e.g. "plane", "copter". Call list_vehicles() if unsure.
     """
     return _get_catalog().lookup_parameter(name, vehicle)
@@ -89,8 +89,10 @@ def search_parameters(
     indexed too, so 'Fast Attitude' will find LOG_BITMASK (which has that
     bit meaning).
 
-    Query syntax follows FTS5: bare words are AND-ed; use double quotes for
-    phrases ('"attitude locking"'); use * for prefix ('RTL*').
+    Plain natural-language text is fine. Optional FTS5 syntax: bare words
+    are AND-ed; use double quotes for phrases ('"attitude locking"'); use *
+    for prefix ('RTL*'). If the query isn't valid FTS5, its words are
+    searched OR-ed and ranked by relevance instead.
 
     Args:
         query: Search terms.
@@ -166,17 +168,14 @@ def diff_parameter(
     copter?"-style questions.
 
     Returns a dict with keys 'name', 'vehicle_a', 'vehicle_b',
-    'exists_in_a', 'exists_in_b', 'version_a', 'version_b',
-    'version_mismatch', and 'differences' (list of field-level diffs).
-    version_a/version_b are each vehicle's stored firmware_version —
-    provenance, not something you pass in — and version_mismatch is true
-    when the two vehicles happen to be pinned to different versions on the
-    Vehicle Roster, since that can itself explain part of the diff. If the
-    parameter is missing in either vehicle, 'differences' is empty and the
-    exists_* flags convey that.
+    'exists_in_a', 'exists_in_b', and 'differences' — a list of
+    {'field', 'value_a', 'value_b'}, where value_a is the field's value in
+    vehicle_a and value_b in vehicle_b. If the parameter is missing in
+    either vehicle, 'differences' is empty and the exists_* flags convey
+    that.
 
     Args:
-        name: Parameter name (case-sensitive).
+        name: Parameter name; case-insensitive.
         vehicle_a: e.g. "plane".
         vehicle_b: e.g. "copter".
     """

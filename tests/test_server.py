@@ -47,6 +47,36 @@ def test_search_tools_vehicle_is_optional(tool_name):
     assert "vehicle" not in schema_required
 
 
+def test_search_tool_end_to_end_survives_natural_language_query(tmp_path, monkeypatch):
+    # Through FastMCP's call_tool, as a client would: punctuation in the
+    # query must not reach the client as a raw SQLite error.
+    import asyncio
+    import json
+
+    from ardupilot_mcp import db, server
+    from ardupilot_mcp.catalog import ParameterCatalog
+
+    roster = tmp_path / "vehicles.json"
+    roster.write_text(json.dumps({"plane": {"url": "https://example.test/p.html"}}))
+    db_path = tmp_path / "t.db"
+    db.init_schema(db_path)
+    with db.connect(db_path) as conn:
+        db.upsert_parameter(conn, db.Parameter(
+            vehicle="plane", firmware_version="4.8.0", name="RTL_ALTITUDE",
+            description="Altitude to hold during RTL",
+        ), scraped_at="2026-01-01T00:00:00+00:00")
+    cat = ParameterCatalog(db_path=db_path, vectors_path=tmp_path / "v.lance",
+                           model_cache_path=tmp_path / "mc", vehicles_config=roster)
+    monkeypatch.setattr(server, "_catalog", cat)
+    try:
+        result = asyncio.run(server.mcp.call_tool(
+            "search_parameters", {"query": "what is the RTL altitude?"}))
+    finally:
+        cat.close()
+
+    assert "RTL_ALTITUDE" in str(result)
+
+
 def test_server_settings_defaults_to_stdio():
     from ardupilot_mcp.server import _server_settings
 

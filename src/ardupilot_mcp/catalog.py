@@ -12,12 +12,13 @@ semantic_search call.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import DEFAULT_DB_PATH, ingested_version, open_connection
+from .db import DEFAULT_DB_PATH, ingested_version, init_schema, open_connection
 from .roster import enabled_vehicles, load_roster
 from .vectors import DEFAULT_MODEL_CACHE_PATH, DEFAULT_VECTORS_PATH, VectorStore
 
@@ -40,6 +41,9 @@ class ParameterCatalog:
         model_cache_path=DEFAULT_MODEL_CACHE_PATH,
         vehicles_config: Optional[Path] = None,
     ) -> None:
+        # Idempotent; a never-ingested store then answers with empty results
+        # (and list_vehicles' ingested_version=None) instead of "no such table".
+        init_schema(db_path)
         self._conn: sqlite3.Connection = open_connection(db_path)
         self._store = VectorStore(path=vectors_path, model_cache_path=model_cache_path)
         self._roster = load_roster(vehicles_config)
@@ -144,7 +148,9 @@ class ParameterCatalog:
         return out
 
     def lookup_parameter(self, name: str, vehicle: str) -> Optional[dict[str, Any]]:
-        """Exact-name lookup, hard-scoped to `vehicle`. None if not found."""
+        """Exact-name lookup, hard-scoped to `vehicle`. None if not found.
+        Case-insensitive: ArduPilot names are always upper case."""
+        name = name.upper()
         row = self._conn.execute(
             """SELECT * FROM parameters
                WHERE vehicle = ? AND name = ?
@@ -174,6 +180,11 @@ class ParameterCatalog:
     ) -> list[dict[str, Any]]:
         """FTS5 keyword search over name/description/section/enum labels.
 
+        `query` is tried as raw FTS5 syntax first (phrases, `RTL*`, AND/OR).
+        If FTS5 rejects it — callers are LLMs writing natural language, so
+        `?`, `,`, `'`, `-` are routine — it is re-run as its word tokens,
+        quoted and OR-joined, ranked by bm25.
+
         `vehicle=None` searches every enabled Vehicle on the Roster (an
         explicit `vehicle=` always reaches its data regardless of enabled —
         see roster.py); a given `vehicle` hard-scopes to just that one.
@@ -189,15 +200,22 @@ class ParameterCatalog:
             vehicle_filter_sql = f"AND p.vehicle IN ({placeholders})"
             vehicle_params = tuple(enabled)
 
-        rows = self._conn.execute(
-            f"""SELECT p.*, snippet(parameters_fts, 2, '[', ']', ' ... ', 12) AS snippet
+        sql = f"""SELECT p.*, snippet(parameters_fts, 2, '[', ']', ' ... ', 12) AS snippet
                 FROM parameters_fts
                 JOIN parameters p ON p.id = parameters_fts.rowid
                 WHERE parameters_fts MATCH ?{vehicle_filter_sql}
                 ORDER BY rank
-                LIMIT ?""",
-            (query, *vehicle_params, limit),
-        ).fetchall()
+                LIMIT ?"""
+        try:
+            rows = self._conn.execute(sql, (query, *vehicle_params, limit)).fetchall()
+        except sqlite3.OperationalError:
+            # FTS5 syntax errors surface as OperationalError with varied
+            # messages ("syntax error near ...", "no such column: ALT").
+            tokens = re.findall(r"\w+", query)
+            if not tokens:
+                return []
+            fallback = " OR ".join(f'"{t}"' for t in tokens)
+            rows = self._conn.execute(sql, (fallback, *vehicle_params, limit)).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
             p = self._row_to_param(r, include_values=False)
@@ -280,13 +298,13 @@ class ParameterCatalog:
     ) -> dict[str, Any]:
         """Field-by-field diff of one parameter's main definition across
         two Vehicles (see docs/adr/0001-single-firmware-version-per-vehicle.md
-        for why this compares vehicles rather than versions).
-
-        `version_a`/`version_b` in the result are each side's stored
-        firmware_version — provenance, not a query input — and
-        `version_mismatch` flags when they differ, since a Vehicle Roster
-        entry can pin a vehicle to an older version than another.
+        for why this compares vehicles rather than versions). Assumes both
+        Vehicles are at the same firmware version, so the payload carries
+        no version fields (docs/adr/0003-diff-assumes-one-shared-firmware-version.md).
+        Each difference reports the field's `value_a`/`value_b`.
         """
+        name = name.upper()
+
         def _fetch(vehicle: str) -> Optional[dict[str, Any]]:
             row = self._conn.execute(
                 """SELECT * FROM parameters
@@ -299,20 +317,12 @@ class ParameterCatalog:
         a = _fetch(vehicle_a)
         b = _fetch(vehicle_b)
 
-        version_a = a.get("firmware_version") if a is not None else None
-        version_b = b.get("firmware_version") if b is not None else None
-
         result: dict[str, Any] = {
             "name": name,
             "vehicle_a": vehicle_a,
             "vehicle_b": vehicle_b,
             "exists_in_a": a is not None,
             "exists_in_b": b is not None,
-            "version_a": version_a,
-            "version_b": version_b,
-            "version_mismatch": (
-                a is not None and b is not None and version_a != version_b
-            ),
             "differences": [],
         }
         if a is None or b is None:
@@ -324,8 +334,8 @@ class ParameterCatalog:
             if a.get(f) != b.get(f):
                 result["differences"].append({
                     "field": f,
-                    "version_a": a.get(f),
-                    "version_b": b.get(f),
+                    "value_a": a.get(f),
+                    "value_b": b.get(f),
                 })
 
         def _val_tuples(p: dict) -> list[tuple]:
@@ -334,8 +344,8 @@ class ParameterCatalog:
         if _val_tuples(a) != _val_tuples(b):
             result["differences"].append({
                 "field": "values",
-                "version_a": a.get("values"),
-                "version_b": b.get("values"),
+                "value_a": a.get("values"),
+                "value_b": b.get("values"),
             })
 
         return result

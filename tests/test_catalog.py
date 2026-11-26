@@ -218,35 +218,18 @@ def test_diff_parameter_compares_vehicles(catalog):
     assert [d["field"] for d in result["differences"]] == ["values"]
 
 
-def test_diff_parameter_reports_version_provenance_and_mismatch(catalog):
-    # plane is 4.8.0, copter is 4.7.0 in the fixture — different versions,
-    # so comparing across vehicles must flag that the two sides aren't at
-    # the same firmware_version.
+def test_diff_parameter_reports_values_per_vehicle_and_no_version_fields(catalog):
+    # ADR 0003: one shared firmware version is assumed, so no version
+    # fields; each difference carries value_a/value_b, not version_a/b.
     result = catalog.diff_parameter("RC_OPTIONS", "plane", "copter")
-    assert result["version_a"] == "4.8.0"
-    assert result["version_b"] == "4.7.0"
-    assert result["version_mismatch"] is True
+    assert not {"version_a", "version_b", "version_mismatch"} & result.keys()
+    (diff,) = result["differences"]
+    assert set(diff) == {"field", "value_a", "value_b"}
+    assert len(diff["value_a"]) == 2 and len(diff["value_b"]) == 1
 
 
-def test_diff_parameter_no_mismatch_when_versions_match(catalog, tmp_path, roster_path):
-    db_path = tmp_path / "same_version.db"
-    db.init_schema(db_path)
-    with db.connect(db_path) as conn:
-        for vehicle in ("plane", "copter"):
-            db.upsert_parameter(
-                conn,
-                db.Parameter(vehicle=vehicle, firmware_version="4.8.0", name="X"),
-                scraped_at="2026-01-01T00:00:00+00:00",
-            )
-    cat = ParameterCatalog(
-        db_path=db_path, vectors_path=tmp_path / "v2.lance",
-        model_cache_path=tmp_path / "mc2", vehicles_config=roster_path,
-    )
-    try:
-        result = cat.diff_parameter("X", "plane", "copter")
-        assert result["version_mismatch"] is False
-    finally:
-        cat.close()
+def test_diff_parameter_name_is_case_insensitive(catalog):
+    assert catalog.diff_parameter("rc_options", "plane", "copter")["exists_in_a"] is True
 
 
 def test_diff_parameter_missing_in_one_vehicle(catalog):
@@ -254,6 +237,45 @@ def test_diff_parameter_missing_in_one_vehicle(catalog):
     assert result["exists_in_a"] is True
     assert result["exists_in_b"] is False
     assert result["differences"] == []
+
+
+# -- MCP clients send natural language, not FTS5 -- #
+
+@pytest.mark.parametrize("query", [
+    "what are the RC options?",
+    "RC-OPTIONS",
+    "rc input, options",
+    "don't ignore RC receiver",
+    "RC_OPTIONS",
+    '"RC input"',
+    "RC_OPT*",
+])
+def test_search_parameters_accepts_llm_style_queries(catalog, query):
+    results = catalog.search_parameters(query, vehicle="plane")
+    assert [r["name"] for r in results][:1] == ["RC_OPTIONS"]
+
+
+@pytest.mark.parametrize("query", ["?!,", "AND"])
+def test_search_parameters_degenerate_query_does_not_raise(catalog, query):
+    assert isinstance(catalog.search_parameters(query, vehicle="plane"), list)
+
+
+def test_lookup_parameter_name_is_case_insensitive(catalog):
+    assert catalog.lookup_parameter("rc_options", vehicle="plane")["name"] == "RC_OPTIONS"
+
+
+def test_fresh_store_answers_without_schema_errors(tmp_path, roster_path):
+    cat = ParameterCatalog(
+        db_path=tmp_path / "fresh.db", vectors_path=tmp_path / "v.lance",
+        model_cache_path=tmp_path / "mc", vehicles_config=roster_path,
+    )
+    try:
+        assert all(v["ingested_version"] is None for v in cat.list_vehicles())
+        assert cat.search_parameters("rtl") == []
+        assert cat.lookup_parameter("RTL_ALT", vehicle="plane") is None
+        assert cat.list_parameters(vehicle="plane") == []
+    finally:
+        cat.close()
 
 
 # -- semantic_search -- #
