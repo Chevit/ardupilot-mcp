@@ -1,4 +1,10 @@
-"""Ingest pipeline: parse an ArduPilot HTML page and load rows into SQLite.
+"""Ingest pipeline: get an ArduPilot parameters page, load it into SQLite,
+optionally rebuild the semantic index.
+
+Three steps, each its own function: `fetch_page` (URL) or `read_page`
+(saved file) produce a `Page`; `load` writes it to SQLite; `rebuild_vectors`
+refreshes the semantic index once for every Vehicle loaded. `ingest_all`
+and `main` compose them.
 
 Ingest is scoped to a single vehicle. Re-running against the same vehicle
 replaces its rows wholesale (see
@@ -34,7 +40,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple
+from typing import Iterable, NamedTuple
 
 import httpx
 
@@ -48,23 +54,25 @@ from .db import (
 )
 from .fetch import detect_vehicle_from_url, fetch_url
 from .roster import VehicleEntry, enabled_vehicles, load_roster
-from .scraper import detect_version, parse_html_file
+from .scraper import detect_version, parse_html
 
 DEFAULT_ARCHIVE_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "ardupilot-docs"
 )
 
 
-class IngestResult(NamedTuple):
-    """What ingest() actually did — count plus the resolved vehicle/version.
+class Page(NamedTuple):
+    """One Vehicle's parameter reference page, ready to load.
 
-    Resolution matters for the --url path: vehicle/firmware_version may have
-    been auto-detected rather than passed in, so callers (the CLI) need a
-    way to find out what was actually ingested.
+    Produced by `fetch_page` (URL) or `read_page` (saved file); consumed by
+    `load`. `source_path` is where the HTML lives on disk — the archive copy
+    for a fetched page — and is recorded in the ingestions table.
     """
-    count: int
+    html: str
     vehicle: str
     firmware_version: str
+    source_url: str | None
+    source_path: Path
 
 
 class VehicleIngestOutcome(NamedTuple):
@@ -78,28 +86,39 @@ class VehicleIngestOutcome(NamedTuple):
     error: str | None = None
 
 
-def _fetch_and_archive(
+def fetch_page(
     url: str,
-    vehicle: str | None,
-    firmware_version: str | None,
-    source_url: str | None,
-    archive_dir: Path,
-    http_client: httpx.Client | None,
-    vehicles_config: Path | None,
-    verbose: bool,
-) -> tuple[Path, str, str, str]:
-    """Fetch `url`, auto-detect vehicle/version, archive HTML to disk.
+    vehicle: str | None = None,
+    firmware_version: str | None = None,
+    source_url: str | None = None,
+    vehicle_names: Iterable[str] | None = None,
+    archive_dir: Path = DEFAULT_ARCHIVE_DIR,
+    http_client: httpx.Client | None = None,
+    verbose: bool = False,
+) -> Page:
+    """Download `url`, detect its vehicle/version, and archive the HTML.
 
-    Returns (archived_html_path, vehicle, firmware_version, source_url) —
-    everything `ingest()` needs to fall through to the shared parse step.
+    Args:
+        url: The ardupilot.org parameters page to fetch.
+        vehicle: Overrides detection from the URL.
+        firmware_version: Overrides detection from the page text.
+        source_url: Canonical URL to record; defaults to `url`.
+        vehicle_names: Names the URL is matched against when `vehicle` is
+            None; defaults to the packaged/overridden Vehicle Roster's keys.
+        archive_dir: Where the fetched HTML is saved.
+        http_client: Client used for fetching; `None` creates a default one.
+        verbose: Print progress to stderr.
+
+    Raises:
+        RuntimeError: If the fetch fails.
+        ValueError: If vehicle or firmware version can't be detected.
     """
     if verbose:
         print(f"[fetch] downloading {url}", file=sys.stderr)
     html = fetch_url(url, client=http_client)
 
     if vehicle is None:
-        roster_names = load_roster(vehicles_config).keys()
-        vehicle = detect_vehicle_from_url(url, vehicle_names=roster_names)
+        vehicle = detect_vehicle_from_url(url, vehicle_names=vehicle_names)
     if vehicle is None:
         raise ValueError(
             f"could not detect vehicle from URL {url!r}; pass --vehicle explicitly"
@@ -113,113 +132,107 @@ def _fetch_and_archive(
         )
 
     archive_dir.mkdir(parents=True, exist_ok=True)
-    archive_name = (
+    archive_path = archive_dir / (
         f"Complete Parameter List — {vehicle.capitalize()} documentation "
         f"{firmware_version}.html"
     )
-    archive_path = archive_dir / archive_name
     archive_path.write_text(html, encoding="utf-8")
     if verbose:
         print(f"[fetch] archived -> {archive_path}", file=sys.stderr)
 
-    return archive_path, vehicle, firmware_version, (source_url or url)
+    return Page(html, vehicle, firmware_version, source_url or url, archive_path)
 
 
-def ingest(
-    html_path: Path | None = None,
-    url: str | None = None,
-    vehicle: str | None = None,
-    firmware_version: str | None = None,
+def read_page(
+    html_path: Path,
+    vehicle: str,
+    firmware_version: str,
     source_url: str | None = None,
-    db_path: Path = DEFAULT_DB_PATH,
-    build_vectors: bool = False,
-    vectors_path: Path | None = None,
-    archive_dir: Path = DEFAULT_ARCHIVE_DIR,
-    http_client: httpx.Client | None = None,
-    vehicles_config: Path | None = None,
-    verbose: bool = False,
-) -> IngestResult:
-    """Get the HTML (from disk or a URL) and write every parameter into the DB.
+) -> Page:
+    """Read a parameters page saved to disk.
 
-    Pass exactly one of `html_path` or `url`. With `html_path`, `vehicle`
-    and `firmware_version` are required. With `url`, both are optional —
-    vehicle is auto-detected from the URL against the Vehicle Roster (see
-    roster.py; `vehicles_config` picks a non-default roster for that
-    detection) and firmware_version from the page text; either can still be
-    passed explicitly to override detection.
+    Args:
+        html_path: The saved HTML file.
+        vehicle: Which Vehicle the page describes.
+        firmware_version: Which Firmware version the page describes.
+        source_url: Canonical URL to record with each row, if known.
 
-    Returns an IngestResult(count, vehicle, firmware_version) — the count of
-    parameters loaded, plus whatever vehicle/firmware_version were actually
-    used (useful when they were auto-detected rather than passed in).
-
-    Existing DB rows for `vehicle` are replaced wholesale inside a single
-    transaction; other vehicles remain intact.
-
-    If `build_vectors=True`, also rebuilds this vehicle's slice of the
-    semantic index after ingest completes.
+    Raises:
+        FileNotFoundError: If `html_path` doesn't exist.
     """
-    if (html_path is None) == (url is None):
-        raise ValueError("pass exactly one of html_path or url")
+    html_path = Path(html_path).resolve()
+    if not html_path.exists():
+        raise FileNotFoundError(html_path)
+    html = html_path.read_text(encoding="utf-8")
+    return Page(html, vehicle, firmware_version, source_url, html_path)
 
-    if url is not None:
-        html_path, vehicle, firmware_version, source_url = _fetch_and_archive(
-            url=url,
-            vehicle=vehicle,
-            firmware_version=firmware_version,
-            source_url=source_url,
-            archive_dir=archive_dir,
-            http_client=http_client,
-            vehicles_config=vehicles_config,
-            verbose=verbose,
-        )
-    else:
-        if vehicle is None or firmware_version is None:
-            raise ValueError(
-                "--vehicle and --firmware-version are required when using --html"
-            )
-        html_path = Path(html_path).resolve()
-        if not html_path.exists():
-            raise FileNotFoundError(html_path)
 
+def load(page: Page, db_path: Path = DEFAULT_DB_PATH, verbose: bool = False) -> int:
+    """Parse `page` and replace its Vehicle's rows in SQLite.
+
+    The Vehicle's existing rows are replaced wholesale inside one
+    transaction (ADR 0001); other Vehicles are untouched. The semantic index
+    is not touched — see `rebuild_vectors`.
+
+    Args:
+        page: From `fetch_page` or `read_page`.
+        db_path: SQLite database to write into.
+        verbose: Print progress to stderr.
+
+    Returns:
+        The number of parameters loaded.
+    """
     if verbose:
-        print(f"[scrape] {vehicle} {firmware_version}: parsing {Path(html_path).name}",
-              file=sys.stderr)
-    params = parse_html_file(
-        html_path,
-        vehicle=vehicle,
-        firmware_version=firmware_version,
-        source_url=source_url,
+        print(f"[scrape] {page.vehicle} {page.firmware_version}: "
+              f"parsing {page.source_path.name}", file=sys.stderr)
+    params = parse_html(
+        page.html,
+        vehicle=page.vehicle,
+        firmware_version=page.firmware_version,
+        source_url=page.source_url,
     )
     if verbose:
         print(f"[scrape] got {len(params)} parameters", file=sys.stderr)
 
     init_schema(db_path)
     scraped_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
     with connect(db_path) as conn:
-        reset_vehicle(conn, vehicle)
+        reset_vehicle(conn, page.vehicle)
         for p in params:
             upsert_parameter(conn, p, scraped_at)
         record_ingestion(
-            conn, vehicle, firmware_version, str(html_path), scraped_at, len(params),
+            conn, page.vehicle, page.firmware_version, str(page.source_path),
+            scraped_at, len(params),
         )
 
     if verbose:
         print(f"[db] wrote {len(params)} rows -> {db_path}", file=sys.stderr)
+    return len(params)
 
-    if build_vectors:
-        # Imported lazily so users who never enable vectors don't pay the
-        # sentence-transformers / torch import cost.
-        from .vectors import VectorStore, rebuild_from_db, DEFAULT_VECTORS_PATH
-        store = VectorStore(path=vectors_path or DEFAULT_VECTORS_PATH)
-        rebuild_from_db(
-            store,
-            vehicle=vehicle,
-            db_path=db_path,
-            verbose=verbose,
-        )
 
-    return IngestResult(len(params), vehicle, firmware_version)
+def rebuild_vectors(
+    vehicles: list[str],
+    db_path: Path = DEFAULT_DB_PATH,
+    vectors_path: Path | None = None,
+    verbose: bool = False,
+) -> None:
+    """Rebuild the semantic index for `vehicles` from SQLite, with one
+    VectorStore so the embedding model loads once for all of them.
+
+    Args:
+        vehicles: Vehicles to rebuild; each must already be loaded.
+        db_path: SQLite database to read from.
+        vectors_path: LanceDB directory; `None` uses the default location.
+        verbose: Print progress to stderr.
+    """
+    if not vehicles:
+        return
+    # Imported lazily so users who never enable vectors don't pay the
+    # sentence-transformers / torch import cost.
+    from .vectors import DEFAULT_VECTORS_PATH, VectorStore, rebuild_from_db
+    store = VectorStore(path=vectors_path or DEFAULT_VECTORS_PATH)
+    for name in vehicles:
+        rebuild_from_db(store, vehicle=name, db_path=db_path, verbose=verbose)
 
 
 def _resolve_target_vehicles(
@@ -310,18 +323,12 @@ def ingest_all(
     outcomes: list[VehicleIngestOutcome] = []
 
     for name in _resolve_target_vehicles(roster, vehicles):
-        entry = roster[name]
         try:
-            result = ingest(
-                url=entry.url,
-                vehicle=name,
-                db_path=db_path,
-                build_vectors=False,
-                archive_dir=archive_dir,
-                http_client=http_client,
-                vehicles_config=vehicles_config,
-                verbose=verbose,
+            page = fetch_page(
+                roster[name].url, vehicle=name, archive_dir=archive_dir,
+                http_client=http_client, verbose=verbose,
             )
+            count = load(page, db_path=db_path, verbose=verbose)
         except (ValueError, RuntimeError, FileNotFoundError) as exc:
             if verbose:
                 print(f"[ingest] {name}: FAILED — {exc}", file=sys.stderr)
@@ -329,16 +336,14 @@ def ingest_all(
             continue
         outcomes.append(VehicleIngestOutcome(
             vehicle=name, success=True,
-            count=result.count, firmware_version=result.firmware_version,
+            count=count, firmware_version=page.firmware_version,
         ))
 
     if build_vectors:
-        succeeded = [o.vehicle for o in outcomes if o.success]
-        if succeeded:
-            from .vectors import VectorStore, rebuild_from_db, DEFAULT_VECTORS_PATH
-            store = VectorStore(path=vectors_path or DEFAULT_VECTORS_PATH)
-            for name in succeeded:
-                rebuild_from_db(store, vehicle=name, db_path=db_path, verbose=verbose)
+        rebuild_vectors(
+            [o.vehicle for o in outcomes if o.success],
+            db_path=db_path, vectors_path=vectors_path, verbose=verbose,
+        )
 
     return outcomes
 
@@ -423,29 +428,39 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {o.vehicle}: {o.error}", file=sys.stderr)
         return 1 if failed else 0
 
+    verbose = not args.quiet
     try:
-        result = ingest(
-            html_path=args.html,
-            url=args.url,
-            vehicle=args.vehicle,
-            firmware_version=args.firmware_version,
-            source_url=args.source_url,
-            db_path=args.db,
-            build_vectors=args.build_vectors,
-            vectors_path=args.vectors_path,
-            vehicles_config=args.vehicles_config,
-            verbose=not args.quiet,
-        )
+        if args.url is not None:
+            # The Roster is only needed to detect the vehicle from the URL;
+            # an explicit --vehicle skips loading it.
+            names = (None if args.vehicle is not None
+                     else load_roster(args.vehicles_config).keys())
+            page = fetch_page(
+                args.url, vehicle=args.vehicle,
+                firmware_version=args.firmware_version,
+                source_url=args.source_url, vehicle_names=names, verbose=verbose,
+            )
+        else:
+            if args.vehicle is None or args.firmware_version is None:
+                raise ValueError(
+                    "--vehicle and --firmware-version are required when using --html"
+                )
+            page = read_page(args.html, args.vehicle, args.firmware_version,
+                             args.source_url)
+        count = load(page, db_path=args.db, verbose=verbose)
+        if args.build_vectors:
+            rebuild_vectors([page.vehicle], db_path=args.db,
+                            vectors_path=args.vectors_path, verbose=verbose)
     except (ValueError, RuntimeError, FileNotFoundError) as exc:
         # Non-technical Docker users are the primary audience (per README) —
-        # a bare traceback is the wrong default here. ingest()'s own
+        # a bare traceback is the wrong default here. fetch_page()'s own
         # ValueError/RuntimeError messages are already written to be
-        # actionable on their own (see _fetch_and_archive).
+        # actionable on their own.
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"ingested {result.count} parameters "
-          f"({result.vehicle} {result.firmware_version}) -> {args.db}")
+    print(f"ingested {count} parameters "
+          f"({page.vehicle} {page.firmware_version}) -> {args.db}")
     return 0
 
 

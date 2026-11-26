@@ -1,7 +1,7 @@
-"""Tests for ingest.py's URL-based ingest path.
+"""Tests for ingest.py: fetch_page/read_page -> load, ingest_all, main().
 
-No real network calls — the URL path is exercised against an
-httpx.MockTransport-backed client injected via ingest()'s http_client param.
+No real network calls — fetching is exercised against an
+httpx.MockTransport-backed client injected via the http_client param.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from ardupilot_mcp.ingest import ingest, ingest_all, main
+from ardupilot_mcp.ingest import fetch_page, ingest_all, load, main, read_page
 
 _FIXTURE_HTML = """
 <html><body>
@@ -32,64 +32,50 @@ def _mock_client(text: str = _FIXTURE_HTML, status: int = 200) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_ingest_from_url_auto_detects_and_archives(tmp_path):
-    db_path = tmp_path / "test.db"
+def test_fetch_page_auto_detects_and_archives(tmp_path):
     archive_dir = tmp_path / "ardupilot-docs"
 
-    result = ingest(
-        url="https://ardupilot.org/copter/docs/parameters.html",
-        db_path=db_path,
+    page = fetch_page(
+        "https://ardupilot.org/copter/docs/parameters.html",
+        vehicle_names=["copter", "plane"],
         archive_dir=archive_dir,
         http_client=_mock_client(),
-        verbose=False,
     )
 
-    assert result.count == 1
-    assert result.vehicle == "copter"
-    assert result.firmware_version == "4.9.0"
-
+    assert page.vehicle == "copter"
+    assert page.firmware_version == "4.9.0"
+    assert page.source_url == "https://ardupilot.org/copter/docs/parameters.html"
     archived = archive_dir / "Complete Parameter List — Copter documentation 4.9.0.html"
-    assert archived.exists()
+    assert page.source_path == archived
     assert "FOO_BAR" in archived.read_text(encoding="utf-8")
 
 
-def test_ingest_from_url_respects_explicit_overrides(tmp_path):
-    db_path = tmp_path / "test.db"
+def test_fetch_page_respects_explicit_overrides(tmp_path):
     archive_dir = tmp_path / "ardupilot-docs"
 
-    result = ingest(
-        url="https://ardupilot.org/copter/docs/parameters.html",
+    page = fetch_page(
+        "https://ardupilot.org/copter/docs/parameters.html",
         vehicle="copter",
         firmware_version="9.9.9-override",
-        db_path=db_path,
         archive_dir=archive_dir,
         http_client=_mock_client(),
-        verbose=False,
     )
 
-    assert result.firmware_version == "9.9.9-override"
+    assert page.firmware_version == "9.9.9-override"
     archived = archive_dir / "Complete Parameter List — Copter documentation 9.9.9-override.html"
     assert archived.exists()
 
 
-def test_ingest_rejects_both_html_and_url(tmp_path):
-    with pytest.raises(ValueError, match="exactly one"):
-        ingest(html_path=tmp_path / "x.html", url="https://example.test/parameters.html")
+def test_read_page_then_load_counts_parameters(tmp_path):
+    html_path = tmp_path / "copter.html"
+    html_path.write_text(_FIXTURE_HTML, encoding="utf-8")
+
+    page = read_page(html_path, vehicle="copter", firmware_version="4.9.0")
+
+    assert load(page, db_path=tmp_path / "test.db") == 1
 
 
-def test_ingest_rejects_neither_html_nor_url():
-    with pytest.raises(ValueError, match="exactly one"):
-        ingest()
-
-
-def test_ingest_html_path_still_requires_vehicle_and_version(tmp_path):
-    html_path = tmp_path / "some.html"
-    html_path.write_text("<html></html>", encoding="utf-8")
-    with pytest.raises(ValueError, match="--vehicle and --firmware-version"):
-        ingest(html_path=html_path)
-
-
-def test_ingest_replaces_only_the_target_vehicle(tmp_path):
+def test_load_replaces_only_the_target_vehicle(tmp_path):
     # ADR-0001: re-ingesting a vehicle wipes it wholesale; other vehicles
     # (and their firmware_version) are untouched.
     from ardupilot_mcp import db as db_module
@@ -97,8 +83,8 @@ def test_ingest_replaces_only_the_target_vehicle(tmp_path):
     db_path = tmp_path / "test.db"
     archive_dir = tmp_path / "ardupilot-docs"
 
-    ingest(url="https://ardupilot.org/copter/docs/parameters.html",
-           db_path=db_path, archive_dir=archive_dir, http_client=_mock_client())
+    load(fetch_page("https://ardupilot.org/copter/docs/parameters.html", vehicle="copter",
+                    archive_dir=archive_dir, http_client=_mock_client()), db_path=db_path)
 
     plane_html = """
     <html><body>
@@ -106,8 +92,9 @@ def test_ingest_replaces_only_the_target_vehicle(tmp_path):
     <section><h3>PLANE_ONLY: A plane parameter¶</h3><p>Desc.</p></section>
     </body></html>
     """
-    ingest(url="https://ardupilot.org/plane/docs/parameters.html",
-           db_path=db_path, archive_dir=archive_dir, http_client=_mock_client(plane_html))
+    load(fetch_page("https://ardupilot.org/plane/docs/parameters.html", vehicle="plane",
+                    archive_dir=archive_dir, http_client=_mock_client(plane_html)),
+         db_path=db_path)
 
     with db_module.connect(db_path) as conn:
         vehicles = {r["vehicle"] for r in conn.execute("SELECT DISTINCT vehicle FROM parameters")}
@@ -352,8 +339,18 @@ def test_main_reports_unknown_roster_vehicle_cleanly(tmp_path, roster_file, caps
     assert "unknown vehicle" in err
 
 
+def test_main_html_requires_vehicle_and_version(tmp_path, capsys):
+    html_path = tmp_path / "some.html"
+    html_path.write_text("<html></html>", encoding="utf-8")
+
+    exit_code = main(["--html", str(html_path), "--db", str(tmp_path / "t.db")])
+
+    assert exit_code == 1
+    assert "--vehicle and --firmware-version are required" in capsys.readouterr().err
+
+
 def test_main_prints_clean_error_instead_of_traceback(tmp_path, capsys):
-    # A missing --html path makes ingest() raise FileNotFoundError. main()
+    # A missing --html path makes read_page() raise FileNotFoundError. main()
     # must catch it, print a one-line message, and return 1 — not let the
     # exception propagate as a raw traceback (this tool's audience per
     # README is explicitly non-technical Docker users).

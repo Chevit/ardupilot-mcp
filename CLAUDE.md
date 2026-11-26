@@ -53,8 +53,7 @@ vehicles exist, their URLs, and whether `--all` fetches them is the **Vehicle Ro
 see `docs/adr/0002-vehicle-roster-owns-the-vehicle-list.md`).
 
 Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main`,
-`ardupilot-refresh` → `ingest:main` (*not* `scripts/refresh.py` — a legacy scan of
-`data/ardupilot-docs/`, still covered by `tests/test_refresh.py`).
+`ardupilot-refresh` → `ingest:main`.
 
 Server transport: `MCP_TRANSPORT=stdio|streamable-http` (default stdio), `MCP_HTTP_PORT`
 (default 8000).
@@ -134,6 +133,8 @@ VPN, or behind a reverse proxy that adds auth.
   bounded by the Roster).
 - `scraper.py` — parses Sphinx-generated ArduPilot parameter HTML into `Parameter` records.
 - `ingest.py` — orchestrates scrape → SQLite write → optional vector rebuild. CLI entry point.
+  Three steps: `fetch_page` (URL) / `read_page` (saved file) → `Page`; `load(page)` → SQLite;
+  `rebuild_vectors(vehicles)` once at the end with one VectorStore.
   `--all` loops the Roster's enabled vehicles, continuing past a failed one, and rebuilds vectors
   once at the end (not once per vehicle — avoids reloading the embedding model repeatedly).
   `--roster NAME...` is the same loop scoped to the named vehicles — both go through
