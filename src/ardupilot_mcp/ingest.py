@@ -349,6 +349,18 @@ def ingest_all(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """`ardupilot-refresh` entry point: parse flags and run one ingest.
+
+    Exactly one source is required: --html, --url, --all or --roster.
+    --vehicle/--firmware-version/--source-url are rejected with --all and
+    --roster. Errors print as one `error:` line rather than a traceback.
+
+    Args:
+        argv: Command-line arguments; `None` reads sys.argv.
+
+    Returns:
+        0 on success; 1 if any vehicle failed or on an argument/IO error.
+    """
     parser = argparse.ArgumentParser(
         description="Ingest ArduPilot parameter reference HTML into SQLite.",
     )

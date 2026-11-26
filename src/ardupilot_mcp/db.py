@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS ingestions (
 
 @dataclass
 class ParameterValue:
+    """One enum value or bitmask bit of a parameter (a parameter_values row)."""
     value: str          # "0", "1", or bit index like "5"
     label: str          # "Disabled", "Ignore RSSI", "Fast Attitude", etc.
     is_bit: bool = False
@@ -96,6 +97,11 @@ class ParameterValue:
 
 @dataclass
 class Parameter:
+    """One parsed parameter definition (a parameters row plus its values).
+
+    Produced by scraper.parse_html, written by upsert_parameter. `backend` is
+    None for the main definition and a driver class name for variants.
+    """
     vehicle: str
     firmware_version: str               # e.g. '4.8.0'
     name: str
@@ -254,6 +260,19 @@ def record_ingestion(
     scraped_at: str,
     count: int,
 ) -> None:
+    """Append one row to the ingestions log for a completed load.
+
+    History only: reset_vehicle never clears it, so it records every load
+    of every vehicle. Nothing in the query path reads it.
+
+    Args:
+        conn: Open connection; the caller commits.
+        vehicle: The Vehicle that was loaded.
+        firmware_version: Version the loaded page describes.
+        source_path: Where the HTML came from on disk (archive copy for a fetch).
+        scraped_at: ISO-8601 UTC timestamp, shared with the loaded rows.
+        count: Number of parameters loaded (stored as param_count).
+    """
     conn.execute(
         """INSERT INTO ingestions
            (vehicle, firmware_version, source_path, scraped_at, param_count)
