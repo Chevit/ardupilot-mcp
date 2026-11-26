@@ -2,8 +2,9 @@
 up, keyword-searched, semantically searched, browsed, and diffed across
 Vehicles. See CONTEXT.md for the ParameterCatalog definition.
 
-Holds one persistent SQLite connection for its process lifetime (safe under
-FastMCP's single-threaded, run-to-completion sync tool calls — no locking
+Holds one persistent SQLite connection for its process lifetime (safe because
+server.py's tools are `async def`, so the MCP SDK runs them one at a time on
+the event loop thread rather than in a worker-thread pool — no locking
 needed), one VectorStore, and the Vehicle Roster (see roster.py) — the
 authority on which vehicles exist and which are enabled for unscoped
 ("vehicle=None") search. The embedding model still loads lazily on first

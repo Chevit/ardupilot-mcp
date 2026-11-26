@@ -143,7 +143,7 @@ VPN, or behind a reverse proxy that adds auth.
   One table holds every vehicle; `rebuild()` replaces only the given vehicle's slice.
 - `catalog.py` — the seam through which all six tools query SQLite + the vector store + the
   Vehicle Roster.
-- `server.py` — FastMCP server exposing the tools: `list_vehicles`, `lookup_parameter`,
+- `server.py` — MCP server (`mcp` 2.x `MCPServer`) exposing the tools: `list_vehicles`, `lookup_parameter`,
   `search_parameters` (FTS5), `semantic_search` (vectors), `list_parameters`, `diff_parameter`.
   `vehicle` has no default anywhere.
 

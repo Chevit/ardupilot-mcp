@@ -315,7 +315,7 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
 
 ## MCP-інструменти
 
-`server.py` надає шість інструментів через FastMCP. `vehicle` ніде не має значення за
+`server.py` надає шість інструментів через `MCPServer` (`mcp` 2.x). `vehicle` ніде не має значення за
 замовчуванням — викличте `list_vehicles()`, якщо не впевнені, що передавати.
 
 - `list_vehicles` — усі апарати з Реєстру, їхній прапорець enabled та ingested_version (null,
@@ -346,7 +346,7 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
   одночасно.
 - `src/ardupilot_mcp/catalog.py` — шов, через який усі шість інструментів звертаються до SQLite,
   векторного сховища та Реєстру апаратів.
-- `src/ardupilot_mcp/server.py` — FastMCP-сервер, що надає шість інструментів вище.
+- `src/ardupilot_mcp/server.py` — MCP-сервер, що надає шість інструментів вище.
 - `Dockerfile`, `docker-compose.yml` — збірка контейнера та сервіси запуску stdio/http.
 
 Див. `docs/adr/` — обґрунтування моделі зберігання «одна версія на апарат», Реєстру апаратів і
@@ -684,7 +684,7 @@ override them, and `-q`/`--quiet` to suppress progress output.
 
 ## MCP tools
 
-`server.py` exposes six tools via FastMCP. `vehicle` has no default anywhere — call
+`server.py` exposes six tools via `MCPServer` (`mcp` 2.x). `vehicle` has no default anywhere — call
 `list_vehicles()` if unsure what to pass.
 
 - `list_vehicles` — every vehicle on the Roster, its enabled flag, and its ingested_version (null
@@ -714,7 +714,7 @@ override them, and `-q`/`--quiet` to suppress progress output.
   once.
 - `src/ardupilot_mcp/catalog.py` — the seam through which all six tools query the SQLite + vector
   stores + Vehicle Roster.
-- `src/ardupilot_mcp/server.py` — FastMCP server exposing the six tools above.
+- `src/ardupilot_mcp/server.py` — MCP server exposing the six tools above.
 - `Dockerfile`, `docker-compose.yml` — container build and stdio/http launch services.
 
 See `docs/adr/` for the reasoning behind the single-version-per-vehicle storage model, the

@@ -1,4 +1,4 @@
-"""Smoke test: server.py registers all six tools against a real FastMCP instance."""
+"""Smoke test: server.py registers all six tools against a real MCPServer instance."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def test_server_registers_all_six_tools():
 ])
 def test_hard_filtered_tools_require_vehicle_no_default(tool_name, required_params):
     # Q3: vehicle is required with no default on every hard-filtered tool —
-    # the client must state it explicitly every call. FastMCP's generated
+    # the client must state it explicitly every call. MCPServer's generated
     # schema marks a param "required" exactly when the Python signature has
     # no default, so this is checked at the schema level.
     from ardupilot_mcp import server
@@ -48,7 +48,7 @@ def test_search_tools_vehicle_is_optional(tool_name):
 
 
 def test_search_tool_end_to_end_survives_natural_language_query(tmp_path, monkeypatch):
-    # Through FastMCP's call_tool, as a client would: punctuation in the
+    # Through MCPServer's call_tool, as a client would: punctuation in the
     # query must not reach the client as a raw SQLite error.
     import asyncio
     import json

@@ -1,4 +1,4 @@
-"""FastMCP server exposing ArduPilot parameter Q&A over local SQLite + LanceDB.
+"""MCP server exposing ArduPilot parameter Q&A over local SQLite + LanceDB.
 
 Run manually (for testing):
     uv run python -m ardupilot_mcp.server
@@ -23,12 +23,16 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from .catalog import ParameterCatalog
 
 
-mcp = FastMCP("ardupilot-docs")
+mcp = MCPServer("ardupilot-docs")
+
+# Tools are `async def` on purpose even though they never await: the SDK runs
+# sync tools in a worker-thread pool, and the catalog's single SQLite
+# connection (see catalog.py) must stay on one thread.
 
 # Lazy catalog — the SQLite connection opens on first tool call; the
 # semantic model loads even later, on first semantic_search call.
@@ -47,7 +51,7 @@ def _get_catalog() -> ParameterCatalog:
 # --------------------------------------------------------------------------- #
 
 @mcp.tool()
-def list_vehicles() -> list[dict[str, Any]]:
+async def list_vehicles() -> list[dict[str, Any]]:
     """List every Vehicle on the Vehicle Roster.
 
     Call this first if you're unsure which vehicle to pass — every other
@@ -60,7 +64,7 @@ def list_vehicles() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def lookup_parameter(name: str, vehicle: str) -> dict[str, Any] | None:
+async def lookup_parameter(name: str, vehicle: str) -> dict[str, Any] | None:
     """Look up an ArduPilot parameter by exact name.
 
     Use this when the user references a specific parameter by name
@@ -78,7 +82,7 @@ def lookup_parameter(name: str, vehicle: str) -> dict[str, Any] | None:
 
 
 @mcp.tool()
-def search_parameters(
+async def search_parameters(
     query: str,
     vehicle: Optional[str] = None,
     limit: int = 10,
@@ -105,7 +109,7 @@ def search_parameters(
 
 
 @mcp.tool()
-def semantic_search(
+async def semantic_search(
     query: str,
     vehicle: Optional[str] = None,
     k: int = 5,
@@ -132,7 +136,7 @@ def semantic_search(
 
 
 @mcp.tool()
-def list_parameters(
+async def list_parameters(
     vehicle: str,
     prefix: Optional[str] = None,
     section: Optional[str] = None,
@@ -155,7 +159,7 @@ def list_parameters(
 
 
 @mcp.tool()
-def diff_parameter(
+async def diff_parameter(
     name: str,
     vehicle_a: str,
     vehicle_b: str,
@@ -212,9 +216,9 @@ def main() -> None:
     """
     transport, host, port = _server_settings()
     if transport == "streamable-http":
-        mcp.settings.host = host
-        mcp.settings.port = port
-    mcp.run(transport=transport)
+        mcp.run(transport="streamable-http", host=host, port=port)
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
