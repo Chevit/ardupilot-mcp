@@ -16,5 +16,5 @@ RUN uv sync --frozen --no-dev
 #     the mcp-http compose service.
 #   - a command override, e.g. `docker compose run --rm mcp-stdio
 #     ardupilot-refresh ...` to run the ingest CLI instead.
-ENTRYPOINT ["uv", "run"]
+ENTRYPOINT ["uv", "run", "--no-sync"]
 CMD ["ardupilot-mcp"]
