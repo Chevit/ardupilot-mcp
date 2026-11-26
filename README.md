@@ -25,7 +25,7 @@ Sphinx HTML-документації параметрів ArduPilot.
 
 ## Вимоги
 
-Перед початком на комп'ютері потрібні дві речі:
+Перед початком на комп'ютері потрібні три речі:
 
 1. **Docker Desktop** — завантажте з [docker.com](https://www.docker.com/products/docker-desktop/)
    і встановіть як звичайну програму. Це єдиний спосіб запуску — Python чи інші інструменти
@@ -300,9 +300,22 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
 тож апарат, доданий у ваш `data/vehicles.json`, одразу доступний для `--roster`. Помилка в імені
 зупиняє весь запуск ще до першого звернення до мережі й показує повний список імен реєстру.
 
+## Конфігурація
+
+Змінні середовища сервера:
+
+- `MCP_TRANSPORT` — `stdio` (за замовчуванням) або `streamable-http`.
+- `MCP_HTTP_PORT` — порт для `streamable-http` (за замовчуванням `8000`).
+- `PORT` — лише для `docker compose`: порт хоста, на який публікується `mcp-http` (за
+  замовчуванням `8000`), наприклад `PORT=9000 docker compose up -d mcp-http`.
+
+Шляхи сховища за замовчуванням: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
+`data/model-cache/` (ONNX-модель e5, ~470 МБ, завантажується при першому семантичному запиті). Сховища, зібрані до переходу на onnxruntime, варто перебудувати командою `ardupilot-refresh --all --build-vectors` (див. `docs/adr/0004-onnx-embeddings.md`). `ardupilot-refresh` приймає `--db` і `--vectors-path`, щоб
+їх перевизначити, та `-q`/`--quiet` для тихого виводу.
+
 ## MCP-інструменти
 
-`server.py` надає шість інструментів через FastMCP. `vehicle` ніде не має значення за
+`server.py` надає шість інструментів через `MCPServer` (`mcp` 2.x). `vehicle` ніде не має значення за
 замовчуванням — викличте `list_vehicles()`, якщо не впевнені, що передавати.
 
 - `list_vehicles` — усі апарати з Реєстру, їхній прапорець enabled та ingested_version (null,
@@ -326,18 +339,19 @@ https://ardupilot.org/plane/docs/parameters.html`, щоб імпортувати
 - `src/ardupilot_mcp/fetch.py` — мережеве завантаження (`fetch_url`) і визначення апарата з URL
   (`detect_vehicle_from_url`, звіряється з іменами в Реєстрі апаратів) для шляхів імпорту
   `--url`/`--all`.
-- `src/ardupilot_mcp/ingest.py` — оркеструє scrape → запис у SQLite → опційну перебудову векторів.
-  Точка входу CLI; `--all` проходить по увімкнених апаратах Реєстру, `--roster NAME...` — лише по
+- `src/ardupilot_mcp/ingest.py` — оркеструє `fetch_page` (URL) / `read_page` (збережений файл) →
+  `load` (запис у SQLite) → опційний `rebuild_vectors`. Точка входу CLI; `--all` проходить по увімкнених апаратах Реєстру, `--roster NAME...` — лише по
   названих, і обидва перебудовують вектори один раз наприкінці.
 - `src/ardupilot_mcp/vectors.py` — шар семантичного пошуку на LanceDB, що тримає всі апарати
   одночасно.
 - `src/ardupilot_mcp/catalog.py` — шов, через який усі шість інструментів звертаються до SQLite,
   векторного сховища та Реєстру апаратів.
-- `src/ardupilot_mcp/server.py` — FastMCP-сервер, що надає шість інструментів вище.
+- `src/ardupilot_mcp/server.py` — MCP-сервер, що надає шість інструментів вище.
 - `Dockerfile`, `docker-compose.yml` — збірка контейнера та сервіси запуску stdio/http.
 
-Див. `docs/adr/` — обґрунтування моделі зберігання «одна версія на апарат» і Реєстру апаратів, а
-також `CONTEXT.md` — глосарій проєкту.
+Див. `docs/adr/` — обґрунтування моделі зберігання «одна версія на апарат», Реєстру апаратів і
+того, чому `diff_parameter` припускає спільну версію прошивки, а також `CONTEXT.md` — глосарій
+проєкту.
 
 ## Запуск тестів
 
@@ -383,7 +397,7 @@ currently points at. See "The Vehicle Roster" below.
 
 ## Requirements
 
-Before you start, you need two things installed on your computer:
+Before you start, you need three things on your computer:
 
 1. **Docker Desktop** — download from [docker.com](https://www.docker.com/products/docker-desktop/)
    and install it like any other app. This is the only way you'll run things — no need to install
@@ -655,9 +669,22 @@ queryable by name; it's just excluded from the unscoped `vehicle=None` search to
 vehicle you add to your own `data/vehicles.json` can be named right away. A misspelled name stops
 the whole run before anything is fetched and prints the roster's full list of names.
 
+## Configuration
+
+Server environment variables:
+
+- `MCP_TRANSPORT` — `stdio` (default) or `streamable-http`.
+- `MCP_HTTP_PORT` — port for `streamable-http` (default `8000`).
+- `PORT` — `docker compose` only: the host port `mcp-http` is published on (default `8000`),
+  e.g. `PORT=9000 docker compose up -d mcp-http`.
+
+Default store paths: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
+`data/model-cache/` (e5 ONNX model, ~470 MB, downloaded on first semantic use). Stores built before the switch to onnxruntime should be rebuilt with `ardupilot-refresh --all --build-vectors` (see `docs/adr/0004-onnx-embeddings.md`). `ardupilot-refresh` takes `--db` and `--vectors-path` to
+override them, and `-q`/`--quiet` to suppress progress output.
+
 ## MCP tools
 
-`server.py` exposes six tools via FastMCP. `vehicle` has no default anywhere — call
+`server.py` exposes six tools via `MCPServer` (`mcp` 2.x). `vehicle` has no default anywhere — call
 `list_vehicles()` if unsure what to pass.
 
 - `list_vehicles` — every vehicle on the Roster, its enabled flag, and its ingested_version (null
@@ -680,18 +707,19 @@ the whole run before anything is fetched and prints the roster's full list of na
 - `src/ardupilot_mcp/fetch.py` — network fetch (`fetch_url`) and URL → vehicle detection
   (`detect_vehicle_from_url`, matched against the Vehicle Roster's names) for the `--url`/`--all`
   ingest paths.
-- `src/ardupilot_mcp/ingest.py` — orchestrates scrape → SQLite write → optional vector rebuild.
-  CLI entry point; `--all` loops the Roster's enabled vehicles and `--roster NAME...` only the ones
+- `src/ardupilot_mcp/ingest.py` — orchestrates `fetch_page` (URL) / `read_page` (saved file) →
+  `load` (SQLite write) → optional `rebuild_vectors`. CLI entry point; `--all` loops the Roster's enabled vehicles and `--roster NAME...` only the ones
   named, both rebuilding vectors once at the end.
 - `src/ardupilot_mcp/vectors.py` — LanceDB-backed semantic search layer, holding every vehicle at
   once.
 - `src/ardupilot_mcp/catalog.py` — the seam through which all six tools query the SQLite + vector
   stores + Vehicle Roster.
-- `src/ardupilot_mcp/server.py` — FastMCP server exposing the six tools above.
+- `src/ardupilot_mcp/server.py` — MCP server exposing the six tools above.
 - `Dockerfile`, `docker-compose.yml` — container build and stdio/http launch services.
 
-See `docs/adr/` for the reasoning behind the single-version-per-vehicle storage model and the
-Vehicle Roster, and `CONTEXT.md` for the project's glossary.
+See `docs/adr/` for the reasoning behind the single-version-per-vehicle storage model, the
+Vehicle Roster, and why `diff_parameter` assumes one shared firmware version, and `CONTEXT.md` for
+the project's glossary.
 
 ## Running tests
 
