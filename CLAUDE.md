@@ -11,6 +11,10 @@ SQLite + LanceDB store, scraped from ArduPilot's Sphinx-generated HTML parameter
 
 Package manager is `uv`. Tests live in `tests/` and run with `uv run pytest`.
 
+Scraper golden tests need `tests/fixtures/*.html` (fetch via `scripts/fetch_test_fixtures.sh`);
+they skip, not fail, when absent. Fixtures are deliberately separate from `data/ardupilot-docs/`
+so an ingest never changes what tests assert.
+
 ```bash
 # Run the MCP server (stdio transport, for manual testing / Claude Desktop)
 uv run python -m ardupilot_mcp.server
@@ -49,7 +53,11 @@ vehicles exist, their URLs, and whether `--all` fetches them is the **Vehicle Ro
 see `docs/adr/0002-vehicle-roster-owns-the-vehicle-list.md`).
 
 Console script entry points (`pyproject.toml`): `ardupilot-mcp` → `server:main`,
-`ardupilot-refresh` → `ingest:main` (note: *not* `scripts/refresh.py`, which is unused).
+`ardupilot-refresh` → `ingest:main` (*not* `scripts/refresh.py` — a legacy scan of
+`data/ardupilot-docs/`, still covered by `tests/test_refresh.py`).
+
+Server transport: `MCP_TRANSPORT=stdio|streamable-http` (default stdio), `MCP_HTTP_PORT`
+(default 8000).
 
 ## Docker
 
@@ -122,6 +130,8 @@ VPN, or behind a reverse proxy that adds auth.
   FTS5 virtual table for keyword search. Unique key: `(vehicle, name, backend)` — one firmware
   version stored per vehicle at a time; `firmware_version` is a provenance column, not part of
   the key. See `docs/adr/0001-single-firmware-version-per-vehicle.md`.
+- `fetch.py` — HTTP fetch from ardupilot.org + `detect_vehicle_from_url` (vehicle names
+  bounded by the Roster).
 - `scraper.py` — parses Sphinx-generated ArduPilot parameter HTML into `Parameter` records.
 - `ingest.py` — orchestrates scrape → SQLite write → optional vector rebuild. CLI entry point.
   `--all` loops the Roster's enabled vehicles, continuing past a failed one, and rebuilds vectors
@@ -135,6 +145,9 @@ VPN, or behind a reverse proxy that adds auth.
 - `server.py` — FastMCP server exposing the tools: `list_vehicles`, `lookup_parameter`,
   `search_parameters` (FTS5), `semantic_search` (vectors), `list_parameters`, `diff_parameter`.
   `vehicle` has no default anywhere.
+
+Default store paths: `data/ardupilot.db` (SQLite), `data/vectors.lance` (LanceDB),
+`data/model-cache/` (e5 weights).
 
 ## Gotchas
 
@@ -160,7 +173,7 @@ VPN, or behind a reverse proxy that adds auth.
 - **`--vehicle`/`--firmware-version`/`--source-url` are rejected with `--all`/`--roster`**, not
   ignored — each vehicle's URL comes from the Roster and its version from the fetched page, so
   accepting them silently would look like they took effect.
-- **Semantic `vehicle=None` dedups by parameter name** — over-fetches `k * 4` candidates across
+- **Semantic `vehicle=None` dedups by parameter name** — over-fetches `k * _SEMANTIC_SEARCH_OVERFETCH` (4, `catalog.py`) candidates across
   enabled vehicles, then collapses same-named matches into one result carrying a `vehicles` list,
   so the returned count is an approximate `k`, not exact.
 
@@ -175,4 +188,5 @@ ardupilot.org. For a single vehicle or a page not on the Roster, pass `--url` in
 
 No linter/formatter is configured. Match the existing style: `from __future__ import
 annotations`, Google-style docstrings with `Args:`, dataclasses for records, modern union
-typing (`X | None`).
+typing (`X | None`) for new code — older modules still use `Optional[...]`; don't churn them
+unprompted.
